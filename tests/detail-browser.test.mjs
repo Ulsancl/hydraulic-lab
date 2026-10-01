@@ -27,6 +27,20 @@ const advance = seconds => page.evaluate(value => window.hydraulicLab.step(value
 const command = id => page.locator(`[data-command="${id}"]`).click();
 const select = id => page.locator('#part-select').selectOption(id);
 const facts = (focus = false) => page.locator(focus ? '#focus-detail-facts .detail-fact' : '#part-detail-facts .detail-fact').evaluateAll(nodes => Object.fromEntries(nodes.map(node => [node.dataset.label, { value: node.dataset.value, unit: node.dataset.unit, text: node.querySelector('dd').textContent.trim() }])));
+const rendering = () => page.evaluate(() => {
+  const canvas = document.querySelector('#scene canvas'), gl = canvas?.getContext('webgl2'), info = gl?.getExtension('WEBGL_debug_renderer_info');
+  const scene = window.hydraulicLab?.sceneDebug();
+  return { documentId: window.__detailDocumentId, readyState: document.readyState, contextLost: gl?.isContextLost() ?? true,
+    renderer: info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : gl?.getParameter(gl.RENDERER),
+    drawCalls: scene?.drawCalls, triangles: scene?.triangles, canvas: canvas && { width: canvas.width, height: canvas.height } };
+});
+async function ready(previousDocumentId = null) {
+  await page.waitForFunction(previous => {
+    if (document.readyState !== 'complete' || !window.__detailDocumentId || window.__detailDocumentId === previous || !window.hydraulicLab) return false;
+    const canvas = document.querySelector('#scene canvas'), gl = canvas?.getContext('webgl2'), scene = window.hydraulicLab.sceneDebug();
+    return !!gl && !gl.isContextLost() && canvas.width > 0 && canvas.height > 0 && scene.ready && scene.drawCalls > 0 && scene.triangles > 0;
+  }, previousDocumentId, { polling: 100, timeout: 60000 });
+}
 function watch(target) {
   target.on('pageerror', error => errors.push({ kind: 'page', message: error.message }));
   target.on('console', message => { if (message.type() === 'error') errors.push({ kind: 'console', message: message.text() }); });
@@ -35,7 +49,12 @@ function watch(target) {
 }
 async function check(name, action) {
   try { await action(); checks.push({ name, passed: true }); console.log('PASS ' + name); }
-  catch (error) { checks.push({ name, passed: false, error: error.message }); await page?.screenshot({ path: path.join(output, 'failure.png'), fullPage: true }).catch(() => {}); throw error; }
+  catch (error) {
+    checks.push({ name, passed: false, error: error.message });
+    await page?.clock.resume().catch(() => {});
+    evidence.push({ failureRendering: await rendering().catch(() => null) });
+    await page?.screenshot({ path: path.join(output, 'failure.png'), fullPage: true, timeout: 5000 }).catch(() => {}); throw error;
+  }
 }
 async function lesson(id) {
   if (!await page.locator('#lesson-picker').evaluate(element => element.open)) await page.locator('#lesson-picker > summary').click();
@@ -46,12 +65,22 @@ try {
   await mkdir(output, { recursive: true });
   await rm(path.join(output, 'failure.png'), { force: true });
   server = await createServer({ root, server: { host: '127.0.0.1', port: 5250, strictPort: true, hmr: false, watch: null } }); await server.listen();
-  browser = await chromium.launch({ headless: true, args: ['--use-angle=swiftshader', '--enable-webgl'] });
+  // Match the existing browser suite; record the actual supported backend below.
+  browser = await chromium.launch({ headless: true });
   context = await browser.newContext({ viewport: { width: 1600, height: 1100 }, deviceScaleFactor: 1, acceptDownloads: true });
+  await context.exposeBinding('__reportDetailContextLoss', (_source, message) => errors.push({ kind: 'webgl', message }));
+  await context.addInitScript(() => {
+    window.__detailDocumentId = crypto.randomUUID();
+    document.addEventListener('webglcontextlost', event => window.__reportDetailContextLoss(event.statusMessage || 'WebGL context lost'), true);
+  });
   page = await context.newPage(); page.setDefaultTimeout(30000); watch(page);
   const origin = new Date('2026-10-02T00:00:00Z');
-  await page.clock.install({ time: origin }); await page.clock.pauseAt(origin);
-  await page.goto(address, { waitUntil: 'networkidle' }); await page.waitForFunction(() => window.hydraulicLab?.sceneDebug().drawCalls > 0); await page.clock.runFor(100);
+  // Keep browser rendering callbacks available during document initialization.
+  // The application itself starts paused; wall time must not advance its state.
+  await page.clock.install({ time: origin });
+  await page.goto(address, { waitUntil: 'commit', timeout: 60000 }); await ready();
+  assert.equal((await state()).running, false); await page.clock.pauseAt(await page.evaluate(() => Date.now() + 60000));
+  evidence.push({ initialRendering: await rendering() });
 
   await check('The refined apparatus renders WebGL and every published component has state-linked facts', async () => {
     const before = await state(), beforeCamera = await camera(), scene = await debug();
@@ -158,9 +187,14 @@ try {
     await page.locator('#reset-camera').click(); assert.notDeepEqual(await camera(), focusedCamera);
     await page.locator('#file-input').setInputFiles(file); await page.clock.runFor(100);
     assert.deepEqual(await project(), saved); cameraNear(await camera(), focusedCamera); assert.equal((await state()).view.selectedPart, 'pump');
-    await page.clock.runFor(300); await page.reload(); await page.waitForFunction(() => !!window.hydraulicLab); await page.clock.runFor(100);
+    await page.clock.runFor(300); assert.equal((await state()).running, false);
+    const previousDocumentId = await page.evaluate(() => window.__detailDocumentId);
+    // Let browser callbacks run across navigation, then verify a new, fully
+    // initialized document instead of relying only on the CDP load event.
+    await page.clock.resume(); await page.reload({ waitUntil: 'commit', timeout: 60000 }); await ready(previousDocumentId);
+    assert.equal((await state()).running, false); await page.clock.pauseAt(await page.evaluate(() => Date.now() + 60000));
     assert.deepEqual(await project(), saved); cameraNear(await camera(), focusedCamera);
-    evidence.push({ persistentFocusCamera: focusedCamera });
+    evidence.push({ persistentFocusCamera: focusedCamera, reloadRendering: await rendering(), previousDocumentId });
   });
 
   await check('New detail controls preserve guided evidence and undo restores its exact preceding experiment', async () => {
@@ -295,6 +329,6 @@ try {
   assert.deepEqual(errors, []); assert.deepEqual(externalRequests, []);
 } finally {
   await mkdir(output, { recursive: true });
-  await writeFile(path.join(output, 'detail-browser-results.json'), JSON.stringify({ version, renderer: 'Chromium WebGL with SwiftShader', checks, evidence, errors, externalRequests }, null, 2));
+  await writeFile(path.join(output, 'detail-browser-results.json'), JSON.stringify({ version, renderer: 'Headless Chromium default backend; actual renderer recorded in evidence. Functional geometry evidence, not physical GPU performance.', checks, evidence, errors, externalRequests }, null, 2));
   await context?.close(); await browser?.close(); await server?.close();
 }
