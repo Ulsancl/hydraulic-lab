@@ -1,0 +1,14 @@
+.hydraulic-scene { position: relative; isolation: isolate; overflow: hidden; min-height: 320px; background: #162633; }
+.hydraulic-scene > canvas { display: block; width: 100%; height: 100%; touch-action: none; outline: none; }
+.hydraulic-scene > canvas:focus-visible { outline: 2px solid #8bdae5; outline-offset: -3px; }
+.hydraulic-label-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 2; }
+.hydraulic-label-lines { position: absolute; inset: 0; width: 100%; height: 100%; overflow: hidden; }
+.hydraulic-label-lines path { fill: none; stroke: #b9d0db75; stroke-width: 1; }
+.hydraulic-label-lines path.is-selected { stroke: #8ce3e7; stroke-width: 1.6; }
+.hydraulic-part-label { position: absolute; display: block; box-sizing: border-box; height: 30px; padding: 0 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 1px solid #7b9ca14f; border-radius: 7px; color: #dce9ef; background: #152934e8; box-shadow: 0 3px 12px #0003; font: 500 11px/28px system-ui, sans-serif; text-align: center; cursor: pointer; pointer-events: auto; }
+.hydraulic-part-label:hover { border-color: #a8d1d9; background: #22434f; }
+.hydraulic-part-label:focus-visible { outline: 2px solid #e7c17b; outline-offset: 2px; }
+.hydraulic-part-label.is-selected { color: #e9ffff; border-color: #76cad2; background: #21525beF; font-weight: 700; }
+.hydraulic-part-label[hidden], .hydraulic-scene-note[hidden] { display: none; }
+.hydraulic-scene-note { position: absolute; bottom: 48px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 28px); box-sizing: border-box; padding: 7px 10px; border: 1px solid #d2ad6350; border-radius: 6px; background: #23323ceF; color: #e3c994; font: 11px/1.5 system-ui, sans-serif; text-align: center; white-space: normal; }
+@media (max-width: 600px) { .hydraulic-part-label { font-size: 10px; padding-inline: 5px; } .hydraulic-scene-note { width: max-content; max-width: calc(100% - 20px); font-size: 10px; bottom: 46px; } }

@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0b1421" />
+    <meta name="description" content="실린더, 방향밸브, 릴리프와 오일의 흐름을 해부하며 실험하는 Hydraulic Lab" />
+    <title>Hydraulic Lab · 유압 구조 실험실</title>
+  </head>
+  <body>
+    <header class="app-header">
+      <a class="brand" href="#workspace" aria-label="Hydraulic Lab 작업 공간"><span class="brand-mark" aria-hidden="true">H<span>↔</span></span><span><strong>HYDRAULIC <b>LAB</b></strong><small>유압 구조 실험실</small></span></a>
+      <div class="header-note">구조를 열고, 흐름을 읽다<span>복동 실린더 · 탠덤 중립 회로</span></div>
+      <nav class="file-actions" aria-label="실험 파일">
+        <button id="new-project" type="button">새 실험</button>
+        <button id="open-project" type="button">열기</button>
+        <button id="save-project" type="button">파일 저장</button>
+        <button id="help" type="button" class="help-button" aria-label="사용 안내">?</button>
+      </nav>
+      <input id="file-input" type="file" accept=".json,application/json" hidden />
+    </header>
+
+    <section id="storage-recovery" class="recovery" role="status" hidden>
+      <div><strong>이전에 저장한 원문을 보호하고 있습니다.</strong><p>읽을 수 없는 자동 저장을 덮어쓰지 않습니다. 현재 실험은 파일로 저장하세요.</p></div>
+      <button id="recover-original" type="button">원문 내려받기</button>
+    </section>
+
+    <main class="app-grid">
+      <section class="workspace panel" id="workspace" aria-label="유압 장치 관찰">
+        <div class="workspace-heading"><div><span class="eyebrow">01 / OBSERVATION</span><h1>오일이 만드는 움직임</h1></div><span class="dimension-tag">Ø60 / Ø35 · 300 mm</span></div>
+        <div class="view-toolbar">
+          <div class="segmented" role="group" aria-label="구조 관찰 방식"><button type="button" data-mode="assembled">조립</button><button type="button" data-mode="cutaway">절개</button><button type="button" data-mode="exploded">분해</button></div>
+          <label class="explode-control" for="explode">분해 간격 <input id="explode" type="range" min="0" max="1" step="0.01" value="0.35" /></label>
+          <button id="reset-camera" type="button" class="subtle">전체 보기</button><button id="focus-view" type="button" class="subtle">크게 보기</button>
+        </div>
+        <div class="scene-wrap">
+          <div id="scene" tabindex="0" role="region" aria-label="3차원 유압 장치. 드래그로 회전, 휠 또는 두 손가락으로 확대합니다."></div>
+          <div class="scene-status" aria-live="off"><span id="running-indicator">관찰 일시정지</span><strong id="scene-caption">중립 · P → T 순환</strong></div>
+          <div class="scene-legend"><span><i class="legend-low"></i>0 bar</span><span><i class="legend-high"></i>100 bar</span><span>→ 유량 방향</span></div>
+          <p id="scene-error" class="scene-error" hidden></p>
+        </div>
+        <div class="layer-toolbar" role="group" aria-label="구조 표시">
+          <label><input type="checkbox" data-layer="housing" checked /> 외피</label><label><input type="checkbox" data-layer="seals" checked /> 씰·가이드</label><label><input type="checkbox" data-layer="paths" checked /> 배관</label>
+          <span class="toolbar-divider"></span><label><input id="labels" type="checkbox" checked /> 이름표</label><label><input id="pressure-colors" type="checkbox" checked /> 압력 색</label><label><input id="flow-arrows" type="checkbox" checked /> 유량 화살표</label>
+        </div>
+        <div class="transport">
+          <div class="direction-control segmented" role="group" aria-label="방향밸브 명령"><button data-command="extend" type="button">전진 <span>→</span></button><button data-command="neutral" type="button">중립 <span>•</span></button><button data-command="retract" type="button">후진 <span>←</span></button></div>
+          <div class="time-control"><button id="play" type="button" class="primary">▶ 재생</button><button id="step" type="button" title="모형 시간 0.1초 진행">+0.1초</button><label for="playback-rate">관찰 속도 <select id="playback-rate"><option value="0.1">0.1×</option><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label></div>
+        </div>
+        <div class="transport-note"><p>일시정지는 <strong>관찰 시간</strong>을 멈춥니다. 중립에서도 펌프는 탱크로 순환합니다.</p><span id="elapsed-time">0.00 s</span></div>
+        <div id="guide-cue" class="guide-cue" hidden><div><strong id="guide-cue-status"></strong><p id="guide-cue-action"></p></div><button id="guide-details" type="button">안내·결과 보기</button></div>
+      </section>
+
+      <aside class="experiment-panel panel" aria-label="실험 조건과 안내">
+        <div class="section-heading"><span class="eyebrow">02 / EXPERIMENT</span><h2>조건을 바꿔 비교하기</h2></div>
+        <form id="settings-form">
+          <label class="number-field" for="pump-flow"><span>펌프 공급 유량<small>오일을 보내는 양</small></span><span class="number-unit"><input id="pump-flow" type="number" min="2" max="12" step="any" required value="6" /><b>L/min</b></span></label>
+          <label class="number-field" for="resisting-force"><span>저항 부하<small>이동을 거스르는 힘</small></span><span class="number-unit"><input id="resisting-force" type="number" min="0" max="10" step="any" required value="4" /><b>kN</b></span></label>
+          <label class="number-field" for="relief-pressure"><span>릴리프 압력 제한<small>펌프 압력의 상한</small></span><span class="number-unit"><input id="relief-pressure" type="number" min="20" max="100" step="any" required value="50" /><b>bar</b></span></label>
+          <button id="apply-settings" type="submit" class="apply-button">새 조건 적용</button>
+          <p class="field-help">현재 위치에서 새 실험을 시작합니다. 중립으로 전환하고 시간·압력·누적 에너지를 초기화합니다.</p>
+          <p id="applied-settings" class="applied-settings"></p>
+        </form>
+        <button id="undo-new" class="undo-button" type="button" hidden>↶ 이전 실험으로 되돌리기</button>
+        <div class="lesson-section"><details id="lesson-picker" open><summary id="lesson-picker-title">어디부터 볼까요?</summary><p class="muted">세 가지 짧은 실험으로 원리를 발견하세요.</p>
+          <div class="lesson-list"><button type="button" data-lesson="speed-ratio"><span>01</span><div>같은 유량, 다른 속도<small>면적과 속도의 관계</small></div><b>↗</b></button><button type="button" data-lesson="pressure-limit"><span>02</span><div>속도와 힘의 한계<small>멈춘 실린더, 흐르는 오일</small></div><b>↗</b></button><button type="button" data-lesson="neutral-hold"><span>03</span><div>움직임이 멈춘 뒤의 압력<small>순환과 고립을 구분하기</small></div><b>↗</b></button></div>
+          </details>
+          <div id="lesson-guide" class="lesson-guide" hidden><div class="guide-heading"><span class="eyebrow">GUIDED EXPERIMENT</span><strong id="guide-status" role="status"></strong></div><h3 id="lesson-title"></h3><p id="lesson-question"></p><progress id="guide-progress" value="0" max="3" aria-label="실제로 확인된 안내 단계"></progress><ol id="lesson-steps"></ol><div class="guide-next"><span>다음 조작</span><p id="guide-action"></p></div><div class="guide-evidence"><span>실제로 확인한 결과</span><p id="guide-result"></p></div><div class="guide-buttons"><button id="guide-restart" type="button">안내 다시 시작</button><button id="guide-exit" type="button">자유 탐구로 전환</button></div><p class="field-help">안내 진행은 파일에 저장하지 않습니다. 실험을 불러오거나 새로 만들면 안내가 종료됩니다.</p></div>
+        </div>
+      </aside>
+
+      <section class="instruments panel" aria-label="유압 계측">
+        <div class="section-heading horizontal"><div><span class="eyebrow">03 / LIVE INSTRUMENTS</span><h2>지금 회로에서 일어나는 일</h2></div><span id="status-badge" class="status-badge">중립 순환</span></div>
+        <p id="status-description" class="status-description"></p>
+        <div class="pressure-grid"><div class="gauge"><span><b>P</b> 펌프 공급</span><strong id="readout-pressure-P">0.0 <small>bar</small></strong><div class="gauge-track"><i id="gauge-P"></i></div></div><div class="gauge"><span><b>A</b> 캡측 액실</span><strong id="readout-pressure-A">0.0 <small>bar</small></strong><div class="gauge-track"><i id="gauge-A"></i></div></div><div class="gauge"><span><b>B</b> 로드측 액실</span><strong id="readout-pressure-B">0.0 <small>bar</small></strong><div class="gauge-track"><i id="gauge-B"></i></div></div></div>
+        <div class="motion-readouts"><div><span>피스톤 위치</span><strong id="readout-position">150.0 <small>mm</small></strong><div class="position-track"><i id="position-indicator"></i></div><small>수축 끝 0 ↔ 전진 끝 300 mm</small></div><div><span>이동 속도 <small>전진 + / 후진 −</small></span><strong id="readout-velocity">0.00 <small>mm/s</small></strong><span id="readout-force">유압력 0.00 kN</span><small id="readout-capacity">중립 · 방향별 힘 한계는 전진/후진에서 확인</small></div></div>
+        <div class="flow-readouts"><div><span>펌프 공급</span><strong id="readout-flow-pump">6.00 L/min</strong></div><div><span>밸브 복귀</span><strong id="readout-flow-return">6.00 L/min</strong></div><div><span>릴리프 우회</span><strong id="readout-flow-relief">0.00 L/min</strong></div></div>
+        <details class="energy-details"><summary>에너지와 오일 체적 <span id="energy-summary">펌프 일 0.00 J</span></summary><div class="energy-grid"><div><span>누적 펌프 일</span><strong id="energy-pump"></strong></div><div><span>부하에 한 일</span><strong id="energy-load"></strong></div><div><span>릴리프 손실</span><strong id="energy-relief"></strong></div><div><span>현재 릴리프 손실률</span><strong id="power-relief"></strong></div><div><span>캡측 / 로드측 오일</span><strong id="volume-cylinder"></strong></div><div><span>탱크 오일</span><strong id="volume-tank"></strong></div></div><p class="field-help">J는 누적 에너지, W는 순간 에너지율입니다. 손실 에너지로 오일 온도를 계산하지 않습니다.</p></details>
+      </section>
+
+      <section class="circuit-panel panel" aria-label="연결 회로도">
+        <div class="section-heading horizontal"><div><span class="eyebrow">04 / CONNECTED CIRCUIT</span><h2>압력과 흐름은 다릅니다</h2></div><span id="circuit-connections">P → T</span></div>
+        <svg id="circuit" viewBox="0 0 500 330" role="img" aria-labelledby="circuit-title circuit-description">
+          <title id="circuit-title">현재 명령에 연결된 유압 회로</title><desc id="circuit-description">회로의 선은 압력을, 움직이는 선과 화살표는 유량을 나타냅니다. 부품을 선택하면 설명이 바뀝니다.</desc>
+          <defs><marker id="circuit-arrow" markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto-start-reverse"><path d="M0 0L5 2.5L0 5Z" fill="context-stroke" /></marker></defs>
+          <path class="circuit-pipe" data-circuit-flow="pumpFromTank" data-pressure-port="T" d="M75 290V181" />
+          <path id="circuit-pump-supply" class="circuit-pipe" data-circuit-flow="pumpFromTank" data-pressure-port="P" d="M97 160H157V235" />
+          <path id="circuit-valve-supply" class="circuit-pipe" data-circuit-flow="supplyToValve" data-pressure-port="P" d="M157 235H250V210" />
+          <path class="circuit-pipe" data-circuit-flow="capIntoCylinder" data-pressure-port="A" d="M250 132V109H240V88" />
+          <path class="circuit-pipe" data-circuit-flow="rodIntoCylinder" data-pressure-port="B" d="M360 132V109H410V88" />
+          <path id="circuit-valve-return" class="circuit-pipe" data-circuit-flow="valveToTank" data-pressure-port="T" d="M360 210V272H300" />
+          <path id="circuit-common-return" class="circuit-pipe" data-circuit-flow="combinedReturn" data-pressure-port="T" d="M300 272H75V290" />
+          <path id="circuit-relief-supply" class="circuit-pipe relief-path" data-circuit-flow="reliefToTank" data-pressure-port="P" d="M157 235V297H225" />
+          <path id="circuit-relief-return" class="circuit-pipe" data-circuit-flow="reliefToTank" data-pressure-port="T" d="M260 297H300V272" />
+          <g class="circuit-part" data-part="pump" role="button" tabindex="0" aria-label="유압 펌프 선택"><circle cx="75" cy="160" r="22" /><path d="M64 168L86 160L64 152Z" class="symbol-fill" /><text x="75" y="122">펌프</text></g>
+          <g class="circuit-part" data-part="tank" role="button" tabindex="0" aria-label="오일 탱크 선택"><path d="M48 288V313H104V288" /><text x="75" y="329">탱크 · 0 bar</text></g>
+          <g class="circuit-part" data-part="piston" role="button" tabindex="0" aria-label="피스톤 선택"><rect x="213" y="39" width="223" height="49" rx="3" /><path id="circuit-piston" d="M324 40V87M324 64H470" /><text x="325" y="23">복동 실린더</text><text x="236" y="69" class="port-letter">A</text><text x="419" y="69" class="port-letter">B</text></g>
+          <g class="circuit-part" data-part="directional-spool" role="button" tabindex="0" aria-label="방향밸브 스풀 선택"><rect x="220" y="132" width="170" height="78" rx="4" /><text x="305" y="154" id="circuit-command">중립</text><text x="250" y="127" class="port-letter">A</text><text x="360" y="127" class="port-letter">B</text><text x="249" y="224" class="port-letter">P</text><text x="361" y="224" class="port-letter">T</text></g>
+          <path id="circuit-link-one" class="circuit-link" d="M250 206V172H360V206" /><path id="circuit-link-two" class="circuit-link" d="" />
+          <g id="circuit-isolated" class="circuit-isolated"><path d="M239 163H261M349 163H371M250 134V163M360 134V163" /></g>
+          <g class="circuit-part" data-part="relief-poppet" role="button" tabindex="0" aria-label="릴리프 포핏 선택"><rect x="225" y="281" width="35" height="32" rx="2" /><path d="M231 305L254 289M248 289H254V295" /><text x="357" y="311" id="circuit-relief-label">릴리프 50 bar</text></g>
+          <text x="114" y="180" id="circuit-pressure-label" class="circuit-value">P 0.0 bar</text>
+        </svg>
+        <p id="circuit-note" class="field-help"></p>
+      </section>
+
+      <section class="components-panel panel" aria-label="부품 탐색">
+        <div class="section-heading"><span class="eyebrow">05 / ANATOMY</span><h2>부품 하나에서 회로 전체로</h2></div>
+        <div class="component-layout"><div class="part-selector"><label for="part-select">살펴볼 부품</label><select id="part-select"></select><div id="component-shortcuts" class="component-shortcuts"><button type="button" data-part="piston">피스톤</button><button type="button" data-part="directional-spool">스풀</button><button type="button" data-part="relief-poppet">릴리프</button><button type="button" data-part="rod-seal">로드 씰</button><button type="button" data-part="pump">펌프</button><button type="button" data-part="tank-oil">오일</button></div></div><div class="part-detail"><span id="part-material" class="eyebrow"></span><h3 id="part-title">피스톤</h3><p id="part-description"></p><button id="focus-part" type="button">선택 부품 가까이 보기 ↗</button><small>부품 선택은 실험 상태와 카메라를 바꾸지 않습니다.</small></div></div>
+      </section>
+    </main>
+    <footer class="app-footer"><p>이상적인 교육용 유압 모형 · 비압축성 · 무관성 · 누설·압력 손실 없음</p><span id="save-status">이 기기에 자동 저장</span></footer>
+    <div id="toast" role="status" class="toast" hidden></div>
+
+    <dialog id="help-dialog" aria-labelledby="help-title"><div class="dialog-heading"><span class="eyebrow">QUICK GUIDE</span><button type="button" id="close-help" aria-label="사용 안내 닫기">×</button></div><h2 id="help-title">유압을 처음 만난다면</h2><ol class="help-steps"><li><strong>전진 또는 후진을 선택하고 재생합니다.</strong><p>방향밸브가 P·A·B·T를 연결합니다. 같은 유량이라도 로드측 면적이 작아 후진이 더 빠릅니다.</p></li><li><strong>멈추어도 압력과 유량을 따로 읽습니다.</strong><p>중립은 P→T 순환과 A·B 고립입니다. 행정 끝이나 압력 한계에서는 펌프 유량이 릴리프로 돌아갑니다.</p></li><li><strong>절개와 분해로 연결을 확인합니다.</strong><p>드래그로 회전, 오른쪽 드래그로 이동, 휠이나 두 손가락으로 확대합니다. 이름표나 회로 부품을 누르면 설명이 바뀝니다.</p></li><li><strong>새 조건은 같은 위치의 새 실험입니다.</strong><p>시간·압력·누적 에너지를 초기화합니다. 되돌리기는 이전 실험을 복원합니다. 관찰 속도는 펌프 설정을 바꾸지 않습니다.</p></li></ol><div class="help-limits"><strong>이 모형에서 알 수 있는 것</strong><p>면적·유량·속도·힘·압력 제한·에너지 수지의 관계를 관찰합니다. 실제 밸브 전환 과도, 압축성, 누설, 마찰 변화, 온도와 장비 안전성은 해석하지 않습니다. 부하는 수평 이동을 거스르는 저항이며 매달린 하중이 아닙니다. 한계 압력과 필요한 압력이 같을 때는 정지로 정의합니다.</p></div><p class="field-help">Space: 재생 / 일시정지 · 파일을 열거나 창이 숨겨지면 관찰을 일시정지합니다. 저장한 실험은 정지 상태로 복원됩니다.</p><form method="dialog"><button class="primary" type="submit">실험 시작하기</button></form></dialog>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
