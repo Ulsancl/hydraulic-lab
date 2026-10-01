@@ -49,7 +49,10 @@ jobs:
       - name: Verify browser observation and interaction
         timeout-minutes: 10
         run: npm run test:browser
-      - name: Verify source desktop app
+      - name: Verify component facts and force-power observations
+        timeout-minutes: 10
+        run: npm run test:detail
+      - name: Verify source desktop app and persistent experiment workflows
         timeout-minutes: 10
         run: npm run test:desktop
       - name: Package Windows installer
@@ -90,6 +93,8 @@ jobs:
           name: hydraulic-lab-verification-${{ github.sha }}
           path: |
             output/browser-integration/report.json
+            output/detail-browser/*.json
+            output/detail-browser/*.png
             output/browser-integration/failure.json
             output/browser-integration/*.png
             output/guide-browser/report.json
