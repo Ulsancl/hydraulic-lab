@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
+const { atomicWriteProject } = require('./atomic-save.cjs');
 
 const APP_URL = 'app://hydraulic/';
 const APP_NAME = 'Hydraulic Lab';
@@ -129,24 +130,15 @@ function registerFileActions() {
     if (nativeBusy) return { canceled: true };
     if (!payload || typeof payload !== 'object') throw new Error('실험 파일 내용을 확인해 주세요.');
     nativeBusy++;
-    let temporary;
     try {
       const contents = await validatedText(payload.contents);
       const result = await dialog.showSaveDialog(mainWindow, { title: '유압 실험 저장',
         defaultPath: path.join(app.getPath('documents'), safeFileName(payload.name)),
         filters: [{ name: '유압 실험 JSON', extensions: ['json'] }] });
       if (result.canceled || !result.filePath) return { canceled: true };
-      await projectTarget(result.filePath, true);
-      temporary = `${result.filePath}.${process.pid}.${Date.now()}.tmp`;
-      const handle = await fsp.open(temporary, 'wx');
-      try { await handle.writeFile(contents, 'utf8'); await handle.sync(); } finally { await handle.close(); }
-      // Rename a complete sibling file; never delete the previous destination first.
-      await projectTarget(result.filePath, true);
-      await fsp.rename(temporary, result.filePath);
-      temporary = null;
+      await atomicWriteProject(result.filePath, contents, { validateTarget: target => projectTarget(target, true) });
       return { canceled: false, path: result.filePath };
     } finally {
-      if (temporary) await fsp.unlink(temporary).catch(() => {});
       nativeBusy--;
     }
   });
@@ -176,7 +168,7 @@ function createMenu() {
       { label: '저장 폴더 열기', click: () => shell.openPath(app.getPath('userData')) },
       { label: '프로그램 정보', click: () => dialog.showMessageBox(mainWindow, { type: 'info', title: APP_NAME,
         message: `${APP_NAME} ${app.getVersion()}`,
-        detail: '복동 실린더·방향밸브·릴리프의 유로와 힘을 관찰하는 개발 중 앱입니다.\n\n현재 실험의 위치·압력·누적 에너지와 관찰 시점을 JSON으로 보관할 수 있습니다.\n\n수평 저항 부하의 비압축성·무관성 준정상 모형입니다. 실제 장비의 중력 하강·압력 파동·누설·발열·안전성을 계산하지 않습니다.', buttons: ['확인'] }) },
+        detail: '복동 실린더·방향밸브·릴리프의 유로와 힘을 관찰하는 교육 앱입니다.\n\n현재 실험의 위치·압력·누적 에너지와 관찰 시점을 JSON으로 보관할 수 있습니다.\n\n수평 저항 부하의 비압축성·무관성 준정상 모형입니다. 실제 장비의 중력 하강·압력 파동·누설·발열·안전성을 계산하지 않습니다.', buttons: ['확인'] }) },
     ] },
   ]));
 }

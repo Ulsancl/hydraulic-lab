@@ -167,8 +167,18 @@ try {
   });
   await check('native save replaces only a complete file; BOM import retains every state field and original bytes', async () => {
     await fs.writeFile(projectPath, 'previous destination remains until complete replacement');
+    await page.evaluate(() => { document.querySelector('#toast').hidden = true; document.querySelector('#toast').textContent = ''; });
     await saveDialog(projectPath); await page.locator('#save-project').click();
-    await waitFor(async () => { try { return JSON.parse(await fs.readFile(projectPath, 'utf8')).type === saved.type; } catch { return false; } }, 'native atomic file save');
+    // Wait for the resolved native IPC result before opening its destination.
+    // Repeated reads while Windows replaces that file can disturb the operation
+    // being tested, and would hide a rejected save behind a generic timeout.
+    await waitFor(async () => {
+      const completion = await page.evaluate(() => ({ toast: document.querySelector('#toast').textContent,
+        busy: document.querySelector('#save-project').disabled }));
+      if (/저장하지 못했습니다|저장을 취소했습니다/.test(completion.toast)) throw new Error(completion.toast);
+      return !completion.busy && /실험 파일에 저장했습니다/.test(completion.toast);
+    }, 'native atomic file save completion');
+    assert.equal(await app.evaluate(() => globalThis.hydraulicSaveCalls), 1);
     const raw = await fs.readFile(projectPath, 'utf8'); sameProject(JSON.parse(raw), saved);
     assert.equal((await fs.readdir(evidence)).some(name => name.endsWith('.tmp')), false);
     await menu('파일', '새 실험'); await waitFor(async () => (await state()).state.timeS === 0, 'new experiment');

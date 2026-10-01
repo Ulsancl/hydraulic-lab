@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5199 --strictPort",
     "build": "vite build",
-    "test": "node --test tests/model.test.mjs tests/geometry.test.mjs tests/project.test.mjs tests/lessons.test.mjs tests/guide.test.mjs",
+    "test": "node --test tests/model.test.mjs tests/geometry.test.mjs tests/project.test.mjs tests/lessons.test.mjs tests/guide.test.mjs tests/atomic-save.test.mjs",
     "test:browser": "node tests/browser.test.mjs && node tests/guide-browser.test.mjs",
     "desktop": "node scripts/desktop.mjs start",
     "package:desktop": "node scripts/desktop.mjs package",
