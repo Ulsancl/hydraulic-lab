@@ -27,15 +27,15 @@ const advance = seconds => page.evaluate(value => window.hydraulicLab.step(value
 const command = id => page.locator(`[data-command="${id}"]`).click();
 const select = id => page.locator('#part-select').selectOption(id);
 const facts = (focus = false) => page.locator(focus ? '#focus-detail-facts .detail-fact' : '#part-detail-facts .detail-fact').evaluateAll(nodes => Object.fromEntries(nodes.map(node => [node.dataset.label, { value: node.dataset.value, unit: node.dataset.unit, text: node.querySelector('dd').textContent.trim() }])));
-const rendering = () => page.evaluate(() => {
+const rendering = (target = page) => target.evaluate(() => {
   const canvas = document.querySelector('#scene canvas'), gl = canvas?.getContext('webgl2'), info = gl?.getExtension('WEBGL_debug_renderer_info');
   const scene = window.hydraulicLab?.sceneDebug();
   return { documentId: window.__detailDocumentId, readyState: document.readyState, contextLost: gl?.isContextLost() ?? true,
     renderer: info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : gl?.getParameter(gl.RENDERER),
     drawCalls: scene?.drawCalls, triangles: scene?.triangles, canvas: canvas && { width: canvas.width, height: canvas.height } };
 });
-async function ready(previousDocumentId = null) {
-  await page.waitForFunction(previous => {
+async function ready(previousDocumentId = null, target = page) {
+  await target.waitForFunction(previous => {
     if (document.readyState !== 'complete' || !window.__detailDocumentId || window.__detailDocumentId === previous || !window.hydraulicLab) return false;
     const canvas = document.querySelector('#scene canvas'), gl = canvas?.getContext('webgl2'), scene = window.hydraulicLab.sceneDebug();
     return !!gl && !gl.isContextLost() && canvas.width > 0 && canvas.height > 0 && scene.ready && scene.drawCalls > 0 && scene.triangles > 0;
@@ -304,9 +304,17 @@ try {
 
   await check('Real-clock closeups expose the actual pump cavity, relief contact and compact detail layout', async () => {
     const visualContext = await browser.newContext({ viewport: { width: 1600, height: 1100 }, deviceScaleFactor: 1 });
+    await visualContext.exposeBinding('__reportDetailContextLoss', (_source, message) => errors.push({ kind: 'webgl', message }));
+    await visualContext.addInitScript(() => {
+      window.__detailDocumentId = crypto.randomUUID();
+      document.addEventListener('webglcontextlost', event => window.__reportDetailContextLoss(event.statusMessage || 'WebGL context lost'), true);
+    });
+    let visual;
     try {
-      const visual = await visualContext.newPage(); watch(visual);
-      await visual.goto(address, { waitUntil: 'networkidle' }); await visual.waitForFunction(() => window.hydraulicLab?.sceneDebug().drawCalls > 0);
+      visual = await visualContext.newPage(); watch(visual);
+      await visual.goto(address, { waitUntil: 'commit', timeout: 60000 }); await ready(null, visual);
+      assert.equal(await visual.evaluate(() => window.hydraulicLab.getState().running), false);
+      evidence.push({ visualRendering: await rendering(visual) });
       await visual.evaluate(value => window.hydraulicLab.loadProject(JSON.stringify(value)), fresh({}, .15, 'extend'));
       await visual.waitForTimeout(200); await visual.screenshot({ path: path.join(output, 'hydraulic-detail-overview.png'), fullPage: true });
       for (const [id, filename] of [['pump', 'pump-closeup'], ['relief-poppet', 'relief-closed'], ['piston', 'piston-closeup']]) {
@@ -323,6 +331,10 @@ try {
       await visual.setViewportSize({ width: 390, height: 844 }); await visual.locator('#focus-view').click();
       await visual.locator('#focus-part-select').selectOption('piston'); await visual.locator('#focus-part-inline').click(); await visual.locator('.focus-detail-panel summary').click(); await visual.waitForTimeout(200);
       await visual.screenshot({ path: path.join(output, 'narrow-piston-detail.png'), fullPage: true });
+    } catch (error) {
+      evidence.push({ visualFailureRendering: await rendering(visual).catch(() => null) });
+      await visual?.screenshot({ path: path.join(output, 'visual-failure.png'), fullPage: true, timeout: 5000 }).catch(() => {});
+      throw error;
     } finally { await visualContext.close(); }
   });
 
