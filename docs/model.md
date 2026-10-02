@@ -111,3 +111,61 @@ Interval은 `durationS`, `segments`, `deltaEnergyJ`, `deltaVolumeM3`를 제공�
 일반 힘·유량 관계는 [Parker의 실린더 응용 자료](https://www.parker.com/content/dam/Parker-com/Literature/Industrial-Cylinder/cylinder/cat/english/Parker_Mobile_Cylinder_Products_Catalog_HY18-1000.pdf), 릴리프와 실제 압력 상승의 구분은 [HydraForce 교육서](https://www.hydraforce.com/globalassets/forms/proportional-manual.pdf)를 참고했다. 대표 치수·경계 정책·코드는 자체 작성했으며 제조사 형상·도표를 포함하지 않는다.
 
 이 계산은 실제 장비의 회로 설계 승인·부하 유지 안전성·정비 판정·열 및 수명 예측을 제공하지 않는다. 관성·압축성·누설·마찰·중력 하중·캐비테이션·실제 릴리프의 유량 특성은 별도 모델이 필요한 확장이다.
+
+## 부품별 상세 관측값
+
+`hydraulicDetail(state, snapshot = instantSnapshot(state))`는 기존 준정상 작동점에서 SI 관측값을 만든다. 원본 상태를 엄격히 검증하며, 잘못된 상태를 기본값으로 바꾸지 않는다. snapshot을 직접 전달하면 같은 state의 `instantSnapshot(state)` 결과여야 한다. `describeHydraulicDetail(partId, state, snapshot)`는 34개 부품에 대해 최대 6개 숫자·단위 행과 해석 문구를 반환한다. 상태·snapshot·설정·누적 에너지를 수정하지 않고, 원본과 공유되는 가변 객체를 반환하지 않는다. 기존 모형 식별자와 저장 형식은 유지한다.
+
+### 실제 압력의 힘과 방향별 한계
+
+```text
+capN          = +pA Ac               A 압력의 전진 방향 기여
+rodN          = −pB Ar               B 압력의 후진 방향 기여
+netHydraulicN = capN + rodN          실제 순유압력
+extendLimitN  = 설정 압력 한계 × Ac  반대측 0 Pa에서의 전진 힘 한계
+retractLimitN = 설정 압력 한계 × Ar  반대측 0 Pa에서의 후진 힘 한계
+```
+
+힘 한계는 크기이며 현재 압력을 사용한 힘과 구분한다. `commandLimitN`은 현재 전진·후진 명령의 한계이고 중립에서는 null이다. `requiredPressurePa`, `pressureMarginPa = 한계 − 필요압력`도 중립에서는 null이다. 압력 여유가 양수여도 행정 끝에서는 이동하지 않는다. 이동/정지 판단은 기존 `snapshot.status`를 그대로 사용한다.
+
+설정 저항력 F는 이동 중에는 운동을 거스르는 힘의 크기, 정지 중에는 시험 저항이 제공할 수 있는 반력의 상한이다. 중립에 고정 방향의 F를 새로 적용하지 않는다. 행정 끝에서는 끝 지지가 추가 반력을 제공할 수 있다. 따라서 부품 관측값은 임의로 외부 하중 분배·씰 마찰·국부 접촉력이나 가속도를 만들지 않는다.
+
+`retractToExtendSpeedRatio = Ac/Ar`는 같은 공급 유량으로 **양방향 모두 이동 가능할 때**의 후진/전진 속력비다. 중립이나 막힘 상태의 0/0 속도 비율이 아니다. 현재 속도는 원래 작동점 값을 사용한다.
+
+### 체적 변화와 남은 이동
+
+각 액실의 `volumeRateM3s`는 해당 액실로 유입할 때 양수다. 캡측은 `Ac v`, 로드측은 `−Ar v`, 탱크의 변화율은 `−(Ac−Ar)v`다. 액실 체적은 6 mm 끝 공간을 포함한 기존 `volumesM3`이며 임의로 별도 공간을 더하지 않는다.
+
+`status === 'moving'`인 경우에만 `distanceToStopM`과 `timeToStopS`를 계산한다. 전진의 남은 거리는 `행정−x`, 후진은 `x`, 시간은 `남은 거리/|v|`다. 중립·압력 제한·행정 끝에서는 두 값이 null이며 화면에는 ‘이동 중 아님’을 표시한다. 도달 예상은 현재 명령·조건을 유지할 때의 **모형 시간**이다. 관찰 일시정지나 재생 배율은 작동점의 압력·유량·속도를 바꾸지 않는다.
+
+### 분기와 합류 유량
+
+P 배관의 분기 전에는 `pumpFromTank`, 방향밸브 P 포트에는 `supplyToValve`, 릴리프 가지에는 `reliefToTank`가 흐른다. 막힘이나 행정 끝에서는 첫 번째는 Q이지만 방향밸브 P 유입은 0이다. 반대로 중립에서는 P→T 경로로 Q가 순환한다.
+
+방향밸브 T 포트의 유량은 `valveToTank`다. 릴리프 유량은 T 포트 바깥에서 합류하므로 공통 복귀관·필터·탱크 복귀 유량은 `returnCombinedM3s = valveToTank + reliefToTank`다. 탱크의 순유입은 합류 복귀 유량에서 펌프 흡입 Q를 뺀 값이다. 공급·반환 유량의 차이를 손실이나 누설로 해석하지 않는다. 단일 로드의 체적 변위에 따른 차이다.
+
+### 동력·에너지·잔압
+
+액실로 들어가는 부호 있는 유압 동력은 `pA × capIntoCylinder`, `pB × rodIntoCylinder`다. 그 합은 `(pA Ac − pB Ar) v`와 같으며, 기존 저항 부하 전달 동력 `F|v|`와 일치한다. 이는 압축 에너지 저장이나 개별 부품 발열 계산이 아니다.
+
+중립에서는 잔압과 순유압력이 남을 수 있어도 양실 유량·실린더 동력은 0이다. P→T 순환의 이상 펌프 동력도 0이다. 잔압을 지우거나 이를 가상의 압축 저장 에너지로 바꾸지 않는다. 릴리프 소산은 W와 누적 J로 읽고, 열용량을 임의로 가정해 오일 온도로 환산하지 않는다.
+
+`power.loadShare`는 펌프 유압 동력이 양수인 경우에만 `부하 유압 동력/펌프 유압 동력`을 반환한다. 중립과 무부하 이동의 0/0에서는 null이다. 이 비율은 모델 내부 동력 배분이며 실제 펌프·시스템 효율이 아니다.
+
+### 수지 잔차
+
+상세 API는 다음 값을 숨기거나 0으로 강제하지 않고 원래 숫자로 반환한다.
+
+```text
+volumeResidualM3       = Vcap + Vrod + Vtank − 기준 총 유체 체적
+rateResidualM3s        = Qcap + Qrod + Qtank,net
+pumpBranchResidualM3s  = Qpump − Qvalve,in − Qrelief
+tankResidualM3s        = Qtank,net − (Qvalve,out + Qrelief − Qpump)
+cylinderPowerResidualW = pA Qcap + pB Qrod − 순유압력 × v
+power.residualW        = 펌프 동력 − 부하 동력 − 릴리프 소산
+energyResidualJ        = 누적 펌프 일 − 누적 부하 일 − 누적 릴리프 소산
+```
+
+행정 끝을 가로지른 시간 구간의 누적 에너지는 기존 구간 적분을 사용한다. 마지막 순간의 릴리프 동력을 구간 전체에 곱해 누적값을 다시 만들지 않는다. 새 조건 적용은 기존 규칙대로 같은 위치의 새 실험이며, 상세 관측 자체는 그 전환을 수행하지 않는다.
+
+추가 검증 `tests/detail-model.test.mjs`는 실제 시간 진행에 따른 액실·탱크 체적 차분, 동일 공급 체적의 양방향 변위·복귀 유량 차이, 끝점 도달 시간, 끝점 전후의 독립적인 `F×이동거리`·`상한압력×릴리프 체적`, 잔압 중립, 압력 경계, 0 부하, 입력 범위 양끝, 모든 부품의 표시 단위와 비변경성을 검사한다.

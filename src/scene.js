@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { COMPONENTS, GEOMETRY_SI as D, SPOOL_GEOMETRY as S, PORTS, CIRCUIT_ROUTES, cylinderGeometry, tankGeometry, spoolGeometry } from './geometry.js';
+import { PUMP_DETAIL, RELIEF_DETAIL, reliefConeY, pumpHousingGeometry, pumpCoverGeometry, pumpGearGeometry, pumpRadialClearanceBound, reliefHousingGeometry, reliefSeatGeometry, reliefPoppetGeometry, engineeringFinish } from './mechanical-geometry.js';
 import './scene.css';
 
 const TAU = Math.PI * 2;
@@ -85,24 +86,11 @@ function roundedPath(points, radius = .016) {
   path.add(new THREE.LineCurve3(cursor, p.at(-1))); return path;
 }
 
-function pumpGearGeometry() {
-  const shape = new THREE.Shape(), teeth = 12;
-  for (let tooth = 0; tooth < teeth; tooth++) {
-    const center = tooth * TAU / teeth;
-    for (const [offset, radius] of [[-.26, .0118], [-.15, .0118], [-.09, .0141], [-.046, .0172], [.046, .0172], [.09, .0141], [.15, .0118], [.26, .0118]]) {
-      const angle = center + offset, x = radius * Math.cos(angle), y = radius * Math.sin(angle);
-      if (tooth === 0 && offset === -.26) shape.moveTo(x, y); else shape.lineTo(x, y);
-    }
-  }
-  shape.closePath();
-  const geometry = new THREE.ExtrudeGeometry(shape, { depth: .016, steps: 1, bevelEnabled: true, bevelSegments: 1, bevelSize: .0003, bevelThickness: .0003 }); geometry.translate(0, 0, -.008); return geometry;
-}
-
 export class HydraulicScene {
   constructor(container, { onSelect = () => {}, onCameraChange = () => {} } = {}) {
     this.container = container; this.onSelect = onSelect; this.onCameraChange = onCameraChange;
     this.disposed = false; this.updating = false; this.view = structuredClone(DEFAULT_VIEW);
-    this.components = new Map(); this.geometries = new Set(); this.materials = new Set(); this.housings = []; this.sealParts = []; this.routes = []; this.highlighted = [];
+    this.components = new Map(); this.geometries = new Set(); this.materials = new Set(); this.textures = new Set(); this.housings = []; this.sealParts = []; this.routes = []; this.highlighted = [];
     this.scene = new THREE.Scene(); this.scene.background = new THREE.Color('#162633');
     this.camera = new THREE.PerspectiveCamera(37, 1, .003, 16);
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
@@ -141,10 +129,13 @@ export class HydraulicScene {
 
   material(properties) { const material = new THREE.MeshStandardMaterial(properties); this.materials.add(material); return material; }
   createMaterials() {
+    const finish = kind => { const texture = engineeringFinish(kind); texture.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy()); this.textures.add(texture); return texture; };
+    const cast = finish('cast'), turned = finish('turned');
     this.mat = {
       steel: this.material({ color: '#afc0ca', metalness: .94, roughness: .25, side: THREE.DoubleSide }),
+      machined: this.material({ color: '#b2bdc2', metalness: .91, roughness: .3, bumpMap: turned, bumpScale: .000025, side: THREE.DoubleSide }),
       chrome: this.material({ color: '#dce7ec', metalness: .98, roughness: .13, side: THREE.DoubleSide }),
-      cast: this.material({ color: '#5d7787', metalness: .72, roughness: .48, side: THREE.DoubleSide }),
+      cast: this.material({ color: '#5d7787', metalness: .72, roughness: .48, bumpMap: cast, bumpScale: .00007, side: THREE.DoubleSide }),
       painted: this.material({ color: '#245265', metalness: .58, roughness: .4, side: THREE.DoubleSide }),
       dark: this.material({ color: '#263c49', metalness: .77, roughness: .34, side: THREE.DoubleSide }),
       brass: this.material({ color: '#c7a66a', metalness: .85, roughness: .28, side: THREE.DoubleSide }),
@@ -355,14 +346,30 @@ export class HydraulicScene {
     for (let index = 0; index < 10; index++) this.sleeve(.014, .0144, .0006, m.steel, this.strainer, [-.4, .04, .16 + index * .0045], 0, TAU, 'z');
     for (let i = 0; i < 12; i++) { const a = i * TAU / 12; this.rodBetween([-.4 + .014 * Math.cos(a), .04 + .014 * Math.sin(a), .157], [-.4 + .014 * Math.cos(a), .04 + .014 * Math.sin(a), .204], .00035, m.steel, this.strainer, 5); }
     this.pump = this.part('pump', D.pumpCenter);
-    this.splitSleeve(.022, .038, .046, m.cast, this.pump, D.pumpCenter, [0, .02, .12], 'z');
-    this.pumpGears = new THREE.Group(); this.pump.add(this.pumpGears);
-    for (const x of [-.375, -.345]) {
-      const gear = new THREE.Group(); gear.position.set(x, .115, -.10); this.pumpGears.add(gear);
-      this.mesh(pumpGearGeometry(), m.brass, gear);
-      this.cylinder(.005, .039, m.chrome, gear, [0, 0, -.012], 'z');
+    const pumpBack = new THREE.Group(), pumpFront = new THREE.Group(); this.pump.add(pumpBack, pumpFront);
+    this.pumpHousingMesh = this.mesh(pumpHousingGeometry(), [m.machined, m.cast], pumpBack, D.pumpCenter);
+    this.pumpCovers = [];
+    for (const sign of [-1, 1]) {
+      const parent = sign < 0 ? pumpBack : pumpFront;
+      const z = D.pumpCenter[2] + sign * (PUMP_DETAIL.bodyHalfWidthM + PUMP_DETAIL.coverThicknessM / 2);
+      const cover = this.mesh(pumpCoverGeometry(), [m.machined, m.cast], parent, [D.pumpCenter[0], D.pumpCenter[1], z]); this.pumpCovers.push(cover);
+      for (const x of PUMP_DETAIL.gearCentersX) this.sleeve(PUMP_DETAIL.journalInnerRadiusM, PUMP_DETAIL.journalOuterRadiusM, PUMP_DETAIL.coverThicknessM, m.brass, parent, [D.pumpCenter[0] + x, D.pumpCenter[1], z], 0, TAU, 'z');
     }
-    this.box([.062, .030, .044], m.dark, this.pump, [-.36, .056, -.10]); this.box([.100, .012, .090], m.cast, this.pump, [-.36, .027, -.10]);
+    for (const [x, y] of PUMP_DETAIL.bolts) {
+      const point = [D.pumpCenter[0] + x, D.pumpCenter[1] + y, D.pumpCenter[2]];
+      this.cylinder(PUMP_DETAIL.boltRadiusM, .028, m.dark, pumpFront, point, 'z', 20);
+      this.bolt(pumpFront, [point[0], point[1], point[2] + .0141], 'z', .8);
+    }
+    this.housing(pumpBack, pumpFront, [0, .02, .12]);
+    this.pumpGears = new THREE.Group(); this.pump.add(this.pumpGears);
+    this.pumpGearMeshes = [];
+    for (const x of PUMP_DETAIL.gearCentersX) {
+      const gear = new THREE.Group(); gear.position.set(D.pumpCenter[0] + x, D.pumpCenter[1], D.pumpCenter[2]); this.pumpGears.add(gear);
+      this.pumpGearMeshes.push(this.mesh(pumpGearGeometry(), [m.machined, m.steel], gear));
+      this.cylinder(PUMP_DETAIL.shaftRadiusM, .047, m.chrome, gear, [0, 0, -.008], 'z');
+    }
+    this.pumpClearance = pumpRadialClearanceBound(this.pumpGearMeshes[0].geometry);
+    this.box([.062, .045, .044], m.dark, this.pump, [-.36, .056, -.10]); this.box([.100, .012, .090], m.cast, this.pump, [-.36, .027, -.10]);
     this.drive = this.part('pump-drive', [-.375, .115, -.19]);
     this.cylinder(.030, .080, m.painted, this.drive, [-.375, .115, -.188], 'z');
     for (let i = 0; i < 10; i++) this.sleeve(.030, .033, .002, m.cast, this.drive, [-.375, .115, -.154 - i * .007], 0, TAU, 'z');
@@ -381,20 +388,25 @@ export class HydraulicScene {
   buildRelief() {
     const m = this.mat, p = D.reliefCenter;
     this.relief = this.part('relief-body', p);
-    this.splitSleeve(.009, .016, .075, m.cast, this.relief, p, [0, 0, .11], 'y');
-    this.sleeve(.004, .010, .004, m.brass, this.relief, [p[0], p[1] - .023, p[2]], 0, TAU, 'y');
+    const back = new THREE.Group(), front = new THREE.Group(); this.relief.add(back, front);
+    this.mesh(reliefHousingGeometry(), [m.cast, m.machined], back, p);
+    this.mesh(reliefHousingGeometry(true), [m.cast, m.machined], front, p); this.housing(back, front, [0, 0, .11]);
+    this.reliefSeatBack = new THREE.Group(); this.reliefSeatFront = new THREE.Group(); this.relief.add(this.reliefSeatBack, this.reliefSeatFront);
+    this.reliefSeatMesh = this.mesh(reliefSeatGeometry(false), m.brass, this.reliefSeatBack, p);
+    this.mesh(reliefSeatGeometry(true), m.brass, this.reliefSeatFront, p);
     this.poppet = this.part('relief-poppet', [p[0], p[1] - .018, p[2]]);
-    this.poppetMesh = this.mesh(new THREE.ConeGeometry(.007, .011, 32), m.chrome, this.poppet, [p[0], p[1] - .0175, p[2]]); this.poppetMesh.rotation.z = Math.PI;
+    this.poppetMesh = this.mesh(reliefPoppetGeometry(), m.chrome, this.poppet, p);
     this.cylinder(.003, .022, m.chrome, this.poppet, [p[0], p[1] - .002, p[2]]);
+    this.cylinder(.0072, .0016, m.steel, this.poppet, [p[0], p[1] - .0036, p[2]]);
     this.reliefSpring = this.part('relief-spring', [p[0], p[1] + .008, p[2]]);
-    this.spring(this.reliefSpring, [p[0], p[1] - .002, p[2]], [p[0], p[1] + .023, p[2]], .0065, 10, .0008);
+    this.reliefSpringMesh = this.spring(this.reliefSpring, [p[0], p[1] + RELIEF_DETAIL.springBottomY, p[2]], [p[0], p[1] + RELIEF_DETAIL.springTopY, p[2]], .0065, 10, .0008);
     this.adjuster = this.part('relief-adjuster', [p[0], p[1] + .043, p[2]]);
     this.cylinder(.008, .022, m.steel, this.adjuster, [p[0], p[1] + .034, p[2]]);
     for (let i = 0; i < 9; i++) this.sleeve(.0075, .0087, .0008, m.dark, this.adjuster, [p[0], p[1] + .024 + i * .0022, p[2]], 0, TAU, 'y');
     this.cylinder(.013, .006, m.dark, this.adjuster, [p[0], p[1] + .047, p[2]], 'y', 6);
     this.reliefPath = new THREE.Group(); this.relief.add(this.reliefPath);
     this.reliefMaterial = this.material({ color: '#73d7dc', emissive: '#36828a', emissiveIntensity: .5, roughness: .3 });
-    this.tube([[p[0], .1275, p[2]], [p[0], .146, p[2]], [p[0] + .012, .158, p[2]], [p[0] + .016, .158, p[2]]], .002, this.reliefMaterial, this.reliefPath);
+    this.tube([[p[0], .1275, p[2]], [p[0], p[1] + RELIEF_DETAIL.tipY - .002, p[2]], [p[0] + .005, p[1] + reliefConeY(.005) + RELIEF_DETAIL.displayLiftM / 2, p[2]], [p[0] + .0081, p[1] - .0094, p[2]], [p[0] + .0081, .158, p[2]], [p[0] + .016, .158, p[2]]], .00055, this.reliefMaterial, this.reliefPath);
     this.box([.018, .087, .018], m.dark, this.relief, [p[0] - .025, .064, p[2]]);
     this.box([.070, .010, .045], m.cast, this.relief, [p[0], .018, p[2]]);
   }
@@ -483,9 +495,10 @@ export class HydraulicScene {
     const explode = this.view.mode === 'exploded' ? this.view.explode : 0;
     this.leftSpring.scale.x = 1 + spool.offsetM / .032; this.leftSpring.position.x = .098 * spool.offsetM / .032;
     this.rightSpring.scale.x = 1 - spool.offsetM / .032; this.rightSpring.position.x = .098 * spool.offsetM / .032;
-    const open = snapshot.flowsM3s.reliefToTank > 1e-12; this.poppet.position.y = open ? .0035 : 0;
+    const open = snapshot.flowsM3s.reliefToTank > 1e-12; this.poppet.position.y = open ? RELIEF_DETAIL.displayLiftM : 0;
     this.reliefPath.visible = open && this.view.layers.paths && this.view.mode !== 'assembled';
-    this.reliefSpring.scale.y = open ? .88 : 1; this.reliefSpring.position.y = open ? .188 * .12 : 0;
+    this.reliefSpring.scale.y = 1 - this.poppet.position.y / (RELIEF_DETAIL.springTopY - RELIEF_DETAIL.springBottomY);
+    this.reliefSpring.position.y = (D.reliefCenter[1] + RELIEF_DETAIL.springTopY) * (1 - this.reliefSpring.scale.y);
     this.capFluidMat.color.copy(this.view.pressureColors ? this.pressureColor(snapshot.portsPa.A) : new THREE.Color('#bba158'));
     this.rodFluidMat.color.copy(this.view.pressureColors ? this.pressureColor(snapshot.portsPa.B) : new THREE.Color('#bba158'));
     for (const [id, material] of Object.entries(this.windowMaterials)) material.color.copy(this.view.pressureColors ? this.pressureColor(snapshot.portsPa[id.startsWith('T') ? 'T' : id]) : new THREE.Color('#4cbed0'));
@@ -515,6 +528,7 @@ export class HydraulicScene {
   applyView(explode = this.view.mode === 'exploded' ? this.view.explode : 0) {
     const cut = this.view.mode !== 'assembled', housing = this.view.layers.housing;
     for (const pair of this.housings) { pair.back.visible = housing; pair.front.visible = housing && (!cut || explode > 0); pair.front.position.set(...pair.displacement.map(value => value * explode)); }
+    this.reliefSeatFront.visible = !cut || explode > 0; this.reliefSeatFront.position.z = .11 * explode;
     this.spoolFront.visible = !cut; this.capFluid.visible = cut && this.view.layers.paths; this.rodFluid.visible = cut && this.view.layers.paths;
     this.spoolBack.visible = true; this.cap.position.x = -.13 * explode; this.gland.position.x = .13 * explode;
     this.rodSeals.forEach((part, index) => { part.position.x = (.15 + index * .045) * explode; });
@@ -650,8 +664,13 @@ export class HydraulicScene {
       this.focusContext = ['relief-poppet', 'relief-spring', 'relief-adjuster', 'relief-body'];
       // Approach the open +Z half from the left and above: the front valve's
       // top rib lies to the right, and the tank wall is below this sight line.
-      direction = [-1, .95, .85];
+      direction = [-.7, .32, 1];
       bounds = new THREE.Box3(V([D.reliefCenter[0] - .027, .123, D.reliefCenter[2] - .021]), V([D.reliefCenter[0] + .026, .221, D.reliefCenter[2] + .021]));
+    } else if (id === 'pump') {
+      this.focusContext = ['pump', 'pump-drive']; direction = [-.18, .85, 1];
+      // The pump sits behind the tank. Frame its body above the pedestal and
+      // approach over the tank wall so an explicit closeup reveals the gears.
+      bounds.min.y = Math.max(bounds.min.y, D.pumpCenter[1] - .041);
     } else if (id.startsWith('directional-') || id.startsWith('port-') || id === 'centering-springs') {
       this.focusContext = ['directional-spool', 'centering-springs', 'port-P', 'port-A', 'port-B', 'port-T'];
       // A shallow view from the left keeps the T fitting and its external hose
@@ -687,6 +706,58 @@ export class HydraulicScene {
     this.render(); return true;
   }
   getComponents() { return COMPONENTS.map(component => ({ ...component })); }
+  pumpVisibility() {
+    if (!this.focusContext?.includes('pump')) return null;
+    const ray = new THREE.Raycaster(), counts = [0, 0];
+    this.pumpGearMeshes.forEach((mesh, index) => {
+      for (let i = 0; i < 4; i++) {
+        const angle = i * TAU / 4, point = mesh.localToWorld(V([.010 * Math.cos(angle), .010 * Math.sin(angle), mesh.geometry.boundingBox.max.z]));
+        const direction = point.clone().sub(this.camera.position); ray.set(this.camera.position, direction.clone().normalize()); ray.far = direction.length() + .0001;
+        const first = ray.intersectObject(this.root, true).find(hit => {
+          for (let node = hit.object; node; node = node.parent) if (!node.visible) return false;
+          const material = Array.isArray(hit.object.material) ? hit.object.material[hit.face.materialIndex] : hit.object.material;
+          return !(material.transparent && material.opacity < .5);
+        });
+        if (first?.object === mesh) counts[index]++;
+      }
+    });
+    return { visible: counts[0] + counts[1], total: 8, perGear: counts };
+  }
+  mechanicalDiagnostics() {
+    const contactRadiusM = (RELIEF_DETAIL.contactInnerRadiusM + RELIEF_DETAIL.contactOuterRadiusM) / 2;
+    // A face-interior probe avoids floating-point ambiguity at shared radial edges.
+    const probeAngle = -Math.PI / 96;
+    const probeX = D.reliefCenter[0] + contactRadiusM * Math.cos(probeAngle), probeZ = D.reliefCenter[2] + contactRadiusM * Math.sin(probeAngle), ray = new THREE.Raycaster();
+    ray.set(V([probeX, D.reliefCenter[1] + .05, probeZ]), V([0, -1, 0]));
+    const seat = ray.intersectObject(this.reliefSeatMesh, false)[0];
+    ray.set(V([probeX, D.reliefCenter[1] - .05, probeZ]), V([0, 1, 0]));
+    const poppet = ray.intersectObject(this.poppetMesh, false)[0];
+    const currentContactGapM = seat && poppet ? poppet.point.y - seat.point.y : null;
+    const springCurve = this.reliefSpringMesh.geometry.parameters.path;
+    const gearAxes = this.pumpGears.children.map(gear => gear.getWorldPosition(new THREE.Vector3()));
+    const coverBounds = this.pumpCovers.map(mesh => new THREE.Box3().setFromObject(mesh));
+    const gearBounds = this.pumpGearMeshes.map(mesh => new THREE.Box3().setFromObject(mesh));
+    const cavityAxes = PUMP_DETAIL.gearCentersX.map(x => this.pumpHousingMesh.localToWorld(V([x, 0, 0])));
+    const eccentricityM = Math.max(...gearAxes.map((axis, i) => Math.hypot(axis.x - cavityAxes[i].x, axis.y - cavityAxes[i].y)));
+    return {
+      pump: {
+        gearAngles: this.pumpGears.children.map(gear => gear.rotation.z), gearAxes: gearAxes.map(axis => axis.toArray()),
+        axisSeparationM: gearAxes[0].distanceTo(gearAxes[1]), pitchRadiusM: PUMP_DETAIL.pitchRadiusM,
+        ...this.pumpClearance, radialClearanceLowerBoundM: this.pumpClearance.radialClearanceLowerBoundM - eccentricityM,
+        axialClearancesM: gearBounds.map(bounds => ({ rear: bounds.min.z - coverBounds[0].max.z, front: coverBounds[1].min.z - bounds.max.z })),
+        visibility: this.pumpVisibility(),
+        motion: 'illustrative phase, not measured pump rpm',
+      },
+      relief: {
+        open: this.poppet.position.y > 0, liftM: this.poppet.position.y, contactRadiusM,
+        seatContact: seat?.point.toArray() ?? null, poppetContact: poppet?.point.toArray() ?? null,
+        currentContactGapM, closedContactGapM: currentContactGapM == null ? null : currentContactGapM - this.poppet.position.y,
+        springLower: this.reliefSpringMesh.localToWorld(springCurve.getPoint(0)).toArray(),
+        springUpper: this.reliefSpringMesh.localToWorld(springCurve.getPoint(1)).toArray(),
+        motion: 'binary illustrative lift, not solved flow area or spring force',
+      },
+    };
+  }
   getDebug() {
     this.root.updateMatrixWorld(true);
     const volume = mesh => { const section = mesh.userData.section; return Math.PI * (section.outerRadiusM ** 2 - section.innerRadiusM ** 2) * section.baseLengthM * mesh.scale.x; };
@@ -703,6 +774,7 @@ export class HydraulicScene {
       drawCalls: this.renderer.info.render.calls, triangles: this.renderer.info.render.triangles, renderFrame: this.renderer.info.render.frame,
       camera: this.getCameraState(), render: { calls: this.renderer.info.render.calls, triangles: this.renderer.info.render.triangles },
       labels: [...this.labels].filter(([, label]) => !label.button.hidden).map(([id, label]) => ({ id, top: parseFloat(label.button.style.top), left: parseFloat(label.button.style.left) })),
+      mechanical: this.mechanicalDiagnostics(), resources: { geometries: this.renderer.info.memory.geometries, textures: this.renderer.info.memory.textures },
     };
   }
   resize() {
@@ -716,6 +788,7 @@ export class HydraulicScene {
     this.controls.removeEventListener('change', this.controlChange); this.controls.dispose();
     this.renderer.domElement.removeEventListener('pointerdown', this.pointerDown); this.renderer.domElement.removeEventListener('pointerup', this.pointerUp);
     for (const geometry of this.geometries) geometry.dispose(); for (const material of this.materials) material.dispose();
+    for (const texture of this.textures) texture.dispose();
     this.environment.dispose(); this.renderer.dispose(); this.renderer.domElement.remove(); this.overlay.remove(); this.container.classList.remove('hydraulic-scene');
   }
 }

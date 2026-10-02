@@ -165,6 +165,39 @@ try {
     assert.deepEqual((await state()).state, paused);
     saved = await project();
   });
+  await check('desktop force and power observations preserve neutral pressure without inventing output power', async () => {
+    const before = await project(), moving = (await state()).snapshot;
+    const capArea = Math.PI * .06 ** 2 / 4, rodArea = Math.PI * (.06 ** 2 - .035 ** 2) / 4;
+    const force = moving.portsPa.A * capArea - moving.portsPa.B * rodArea;
+    assert.ok(Math.abs(Number(await page.locator('#force-net').getAttribute('data-value')) - force) < 1e-8);
+    assert.ok(Math.abs(Number(await page.locator('#power-value-load').getAttribute('data-value')) - before.state.settings.resistingForceN * Math.abs(moving.velocityMps)) < 1e-8);
+    await page.locator('[data-command="neutral"]').click();
+    const isolated = await state();
+    assert.equal(isolated.snapshot.portsPa.A, moving.portsPa.A);
+    assert.equal(isolated.snapshot.portsPa.B, moving.portsPa.B);
+    assert.equal(isolated.detail.force.netHydraulicN, force);
+    assert.equal(isolated.detail.power.pumpW, 0); assert.equal(isolated.detail.power.loadW, 0);
+    assert.equal(await page.locator('#power-share-load').getAttribute('data-share'), '0');
+    assert.equal(await page.locator('#power-share-relief').getAttribute('data-share'), '0');
+    await page.evaluate(value => window.hydraulicLab.loadProject(JSON.stringify(value)), before);
+    sameProject(await project(), before);
+  });
+  await check('focused desktop component facts and explicit close camera remain usable and persistent', async () => {
+    const before = await project();
+    await page.locator('#focus-view').click();
+    await page.locator('#focus-part-select').selectOption('pump');
+    assert.deepEqual((await state()).state, before.state);
+    await page.locator('.focus-detail-panel summary').click();
+    assert.ok(await page.locator('#focus-detail-facts .detail-fact').count() > 0);
+    await page.locator('#focus-part-inline').click();
+    const closeCamera = await page.evaluate(() => window.hydraulicLab.camera());
+    assert.notDeepEqual(closeCamera, before.observation.camera);
+    assert.deepEqual((await project()).observation.camera, closeCamera);
+    await page.screenshot({ path: path.join(evidence, 'native-component-details.png') });
+    await page.locator('#focus-view').click();
+    await page.evaluate(value => window.hydraulicLab.loadProject(JSON.stringify(value)), before);
+    sameProject(await project(), before);
+  });
   await check('native save replaces only a complete file; BOM import retains every state field and original bytes', async () => {
     await fs.writeFile(projectPath, 'previous destination remains until complete replacement');
     await page.evaluate(() => { document.querySelector('#toast').hidden = true; document.querySelector('#toast').textContent = ''; });

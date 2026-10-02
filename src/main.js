@@ -1,4 +1,7 @@
 import './style.css';
+import './detail.css';
+import { hydraulicDetail } from './detail-model.js';
+import { renderHydraulicDetails } from './detail-panel.js';
 import { createExperiment, setCommand, reconfigureExperiment, instantSnapshot, step as modelStep, MAX_STEP_SECONDS, MAX_SIMULATION_TIME_S } from './model.js';
 import { createProject, parseProject, serializeProject, normalizeView, normalizePlaybackRate, DEFAULT_VIEW } from './project.js';
 import { LESSONS } from './lessons.js';
@@ -13,7 +16,7 @@ const desktop = window.hydraulicDesktop;
 const commands = { extend: '전진', neutral: '중립', retract: '후진' };
 const statuses = { neutral: '중립 순환', moving: '이동 중', 'pressure-limit': '압력 한계로 정지', 'end-stop': '행정 끝 도달' };
 let state = createExperiment(), snapshot = instantSnapshot(state), view = normalizeView(DEFAULT_VIEW), playbackRate = 1;
-let scene, running = false, busy = false, restoring = false, focused = false, lessonId = null;
+let scene, running = false, busy = false, restoring = false, focused = false, lessonId = null, externalClock = false;
 let guide = null, guideRenderKey = null;
 let initialCamera = null, previousExperiment = null, recoveredRaw = null, storageBlocked = false;
 let saveTimer, toastTimer, lastFrame = performance.now(), lastReadout = 0, lastAutosave = 0;
@@ -75,14 +78,14 @@ function syncPlayback() {
 }
 function stop() {
   const wasRunning = running;
-  running = false; syncPlayback();
+  running = false; externalClock = false; syncPlayback();
   if (wasRunning) refresh(true, 0);
   scheduleSave();
 }
 function begin() {
   if (busy) return;
   if (state.timeS >= MAX_SIMULATION_TIME_S) { toast('이 실험의 시간 범위에 도달했습니다. 새 조건 또는 새 실험으로 시작하세요.'); return; }
-  running = true; lastFrame = performance.now(); syncPlayback();
+  running = true; externalClock = false; lastFrame = performance.now(); syncPlayback();
 }
 function toggle() { if (running) stop(); else begin(); }
 function setBusy(value) {
@@ -331,6 +334,7 @@ function refreshReadouts() {
   $$('[data-part]').forEach(element => element.setAttribute('aria-pressed', element.dataset.part === view.selectedPart));
   const part = scene.getComponents().find(item => item.id === view.selectedPart);
   if (part) { text('#part-title', part.name); text('#part-material', part.material); text('#part-description', part.description); }
+  renderHydraulicDetails(state, snapshot, view);
 }
 function refresh(force = false, elapsedS = 0) {
   snapshot = instantSnapshot(state);
@@ -388,6 +392,7 @@ try {
   $('#part-select').replaceChildren(...scene.getComponents().map(part => {
     const option = document.createElement('option'); option.value = part.id; option.textContent = part.name; return option;
   }));
+  $('#focus-part-select').replaceChildren(...[...$('#part-select').options].map(option => option.cloneNode(true)));
   syncControls({ settings: true }); refresh(true);
   if (initialCamera) scene.setCameraState(initialCamera);
   else scene.resetCamera();
@@ -427,13 +432,19 @@ try {
   }
   $('#playback-rate').addEventListener('change', event => { playbackRate = normalizePlaybackRate(Number(event.target.value)); syncPlayback(); scheduleSave(); });
   $('#part-select').addEventListener('change', event => selectPart(event.target.value));
+  $('#focus-part-select').addEventListener('change', event => selectPart(event.target.value));
   document.addEventListener('click', event => { const part = event.target.closest('[data-part]'); if (part) selectPart(part.dataset.part); });
   $$('svg [data-part]').forEach(element => element.addEventListener('keydown', event => {
     if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.isComposing || event.target.isContentEditable) return;
     if (event.key === 'Enter' || event.code === 'Space') { event.preventDefault(); selectPart(element.dataset.part); }
   }));
   $('#reset-camera').addEventListener('click', () => { scene.resetCamera(); scheduleSave(); });
-  $('#focus-part').addEventListener('click', () => { scene.focusPart(view.selectedPart); scheduleSave(); });
+  const focusSelectedPart = () => {
+    if (scene.focusPart(view.selectedPart)) scheduleSave();
+    else toast('현재 숨겨진 부품입니다. 외피·씰·배관의 표시 설정을 켠 뒤 가까이 보세요.');
+  };
+  $('#focus-part').addEventListener('click', focusSelectedPart);
+  $('#focus-part-inline').addEventListener('click', focusSelectedPart);
   $('#focus-view').addEventListener('click', focusView);
   $('#new-project').addEventListener('click', newExperiment);
   $('#save-project').addEventListener('click', saveFile); $('#open-project').addEventListener('click', openFile);
@@ -458,7 +469,7 @@ try {
   window.addEventListener('beforeunload', saveLocal);
 
   window.hydraulicLab = {
-    getState: () => structuredClone({ state, snapshot: instantSnapshot(state), view, playbackRate, running }),
+    getState: () => structuredClone({ state, snapshot: instantSnapshot(state), view, playbackRate, running, detail: hydraulicDetail(state), focused }),
     project: () => structuredClone(capture()),
     loadProject: contents => { const validated = parseProject(contents); readProject(validated); return structuredClone(capture()); },
     step: seconds => manualStep(seconds),
@@ -467,11 +478,19 @@ try {
     sceneDebug: () => structuredClone(scene.getDebug()),
     guide: () => structuredClone(guide),
   };
+  window.advanceTime = milliseconds => {
+    if (!Number.isFinite(milliseconds) || milliseconds < 0 || milliseconds > 60000) throw new RangeError('관찰 진행은 0–60000 ms 범위여야 합니다.');
+    externalClock = true;
+    const duration = running ? milliseconds / 1000 * playbackRate : 0;
+    if (duration > 0) advance(duration);
+    refresh(true, duration);
+  };
+  window.render_game_to_text = () => JSON.stringify({ coordinateSystem: 'SI m/s/Pa/m³/N/W/J; +X cylinder extension; gauge pressure relative to tank; quasi-static model', ...window.hydraulicLab.getState() });
   saveLocal();
   function frame(now) {
     const elapsed = Math.max(0, (now - lastFrame) / 1000); lastFrame = now;
     let advanced = 0;
-    if (running && !document.hidden) {
+    if (running && !externalClock && !document.hidden) {
       try { advanced = elapsed * playbackRate; advance(advanced); }
       catch (error) { advanced = 0; stop(); toast(error.message); }
       if (now - lastAutosave > 1500) { lastAutosave = now; saveLocal(); }

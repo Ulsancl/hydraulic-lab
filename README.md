@@ -2,9 +2,25 @@
 
 복동 유압 실린더·방향제어 밸브·릴리프 밸브를 열어 보고 조작하는 한국어 Windows 시뮬레이터입니다. 같은 펌프 유량에서 전진과 후진의 속도가 다른 이유, 하중과 압력의 관계, 움직임이 멈춘 뒤에도 흐르거나 갇혀 있는 오일을 관찰합니다.
 
+현재 브랜치는 **1.1.0 개선 작업본**입니다. 공개된 설치판은 [1.0.0](https://github.com/Ulsancl/hydraulic-lab/releases/tag/v1.0.0)이며, 새 설치판의 공개 완료를 뜻하지 않습니다.
+
 ![Hydraulic Lab의 실제 절개 관찰 화면](public/screenshots/hydraulic-workspace.png)
 
 34개 부품과 11개 배관 경로를 조립·절개·분해해 살펴봅니다. 부품 이름표는 수평을 유지하며, 3D 화면·회로도·계측판이 같은 계산 상태를 표시합니다. **색은 압력, 화살표는 유량 방향**입니다.
+
+## 1.1.0 상세 관찰
+
+부품을 선택하면 해당 위치의 압력·유량·체적·힘을 읽습니다. **압력에서 힘·동력으로**에서는 A측과 B측 힘의 방향 및 합, 부하에 전달되는 동력과 릴리프 소산을 함께 비교합니다. 수치와 막대는 현재 적용한 조건을 사용하며 편집 중인 입력 초안은 **새 조건 적용** 전까지 반영하지 않습니다.
+
+**크게 보기**에서도 부품을 고르고 계산값을 펼칠 수 있습니다. 부품을 고르는 동작은 시점을 유지하고, **선택 부품 가까이 보기**는 관찰 시점을 바꿉니다. 이 시점은 기존 방식대로 실험 파일에 저장됩니다.
+
+기어 펌프의 공동과 릴리프 접촉면도 실제 부품이 들어맞도록 보강했습니다. 펌프 가까이 보기에서는 두 기어와 공동을, 릴리프 절개에서는 닫힘 접촉면과 열린 틈을 확인할 수 있습니다. 계산은 기존 `hydraulic-quasistatic-1` 모형을 유지합니다. 중립의 잔압은 흐름이나 출력 동력이 아니며, 릴리프 소산을 온도로 바꾸지 않습니다. [상세 관찰과 검증 범위](docs/detail-refinement.md)를 참고하세요.
+
+![양실 힘과 동력을 함께 보는 실제 개선 화면](public/screenshots/hydraulic-detail.png)
+
+![펌프 기어와 두 보어의 실제 확대 화면](public/screenshots/pump-detail.png)
+
+![열린 릴리프 포핏과 시트 절개 화면](public/screenshots/relief-detail.png)
 
 ## 설치하고 시작하기
 
@@ -53,6 +69,7 @@ npm test
 npm run build
 npx --no-install playwright install chromium
 npm run test:browser
+npm run test:detail
 node scripts/desktop.mjs prepare-test
 npm run test:desktop
 ```
