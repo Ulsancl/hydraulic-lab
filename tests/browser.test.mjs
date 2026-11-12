@@ -1,3 +1,4 @@
+import { artifactDirectory } from '../scripts/safe-files.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -7,7 +8,7 @@ import { createExperiment, step } from '../src/model.js';
 import { createProject } from '../src/project.js';
 
 const root = path.resolve(import.meta.dirname, '..');
-const output = path.join(root, 'output/browser-integration');
+const output = artifactDirectory(root, path.join(root, 'output/browser-integration'));
 await fs.mkdir(output, { recursive: true });
 const server = await createServer({ root, server: { host: '127.0.0.1', port: 5200, strictPort: true } });
 await server.listen();
