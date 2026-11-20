@@ -221,7 +221,15 @@ try {
       const downloadEvent = recovery.waitForEvent('download'); await recovery.locator('#recover-original').click();
       const download = await downloadEvent, file = path.join(output, 'recovered-original.txt');
       await download.saveAs(file); assert.equal(await fs.readFile(file, 'utf8'), raw);
-      assert(await recovery.evaluate(text => Object.keys(localStorage).some(key => key.includes('original') && localStorage.getItem(key) === text), raw));
+      const originals = () => recovery.evaluate(text => Object.keys(localStorage)
+        .filter(key => key.startsWith('hydraulic-lab-project-v1-original-') && localStorage.getItem(key) === text).sort(), raw);
+      const firstLaunch = await originals();
+      assert.equal(firstLaunch.length, 1);
+      await recovery.reload({ waitUntil: 'networkidle' });
+      await recovery.waitForFunction(() => !!window.hydraulicLab);
+      assert.deepEqual(await originals(), firstLaunch);
+      assert.equal(await recovery.evaluate(() => localStorage.getItem('hydraulic-lab-project-v1')), raw);
+      assert.equal(await recovery.locator('#recover-original').isVisible(), true);
     } finally { await recoveryContext.close(); }
   });
 
@@ -264,6 +272,31 @@ try {
     await visualContext.close();
   });
 
+  await check('exporting and closing a stale tab preserves both observations', async () => {
+    const tabs = await browser.newContext({ acceptDownloads: true });
+    const key = 'hydraulic-lab-project-v1';
+    const openTab = async () => {
+      const tab = await tabs.newPage();
+      await tab.goto('http://127.0.0.1:5200/', { waitUntil: 'domcontentloaded' });
+      await tab.waitForFunction(() => !!window.hydraulicLab);
+      return tab;
+    };
+    try {
+      const stale = await openTab();
+      await stale.evaluate(() => window.hydraulicLab.step(1));
+      const current = await openTab();
+      await current.evaluate(() => window.hydraulicLab.step(2));
+      const newest = await current.evaluate(key => localStorage.getItem(key), key);
+      assert.equal(JSON.parse(newest).state.timeS, 3);
+      const pending = stale.waitForEvent('download'); await stale.locator('#save-project').click();
+      const download = await pending;
+      const exported = JSON.parse(await fs.readFile(await download.path(), 'utf8'));
+      assert.equal(exported.state.timeS, 1);
+      const closed = stale.waitForEvent('close');
+      await stale.close({ runBeforeUnload: true }); await closed;
+      assert.equal(await current.evaluate(key => localStorage.getItem(key), key), newest);
+    } finally { await tabs.close(); }
+  });
   await check('the application uses local assets and reports no browser errors', async () => {
     assert.deepEqual(errors, []); assert.deepEqual(externalRequests, []);
   });
