@@ -49,7 +49,15 @@ function protectOriginal(raw, futureVersion) {
   // Keep the original primary key untouched for corrupt as well as future data.
   // A backup is extra protection; successful backup does not authorize overwrite.
   recoveredRaw = raw; storageBlocked = true;
-  try { localStorage.setItem(`${STORAGE_KEY}-original-${Date.now()}`, raw); } catch { /* The primary original remains untouched. */ }
+  try {
+    const prefix = STORAGE_KEY + '-original-';
+    const archived = Object.keys(localStorage).some(key => key.startsWith(prefix) && localStorage.getItem(key) === raw);
+    if (!archived) {
+      let id = Date.now();
+      while (localStorage.getItem(prefix + id) !== null) id++;
+      localStorage.setItem(prefix + id, raw);
+    }
+  } catch { /* The primary original remains untouched, even at quota. */ }
   $('#storage-recovery').hidden = false;
   if (futureVersion) {
     text('#storage-recovery strong', '더 새로운 버전에서 저장한 실험입니다.');

@@ -221,7 +221,15 @@ try {
       const downloadEvent = recovery.waitForEvent('download'); await recovery.locator('#recover-original').click();
       const download = await downloadEvent, file = path.join(output, 'recovered-original.txt');
       await download.saveAs(file); assert.equal(await fs.readFile(file, 'utf8'), raw);
-      assert(await recovery.evaluate(text => Object.keys(localStorage).some(key => key.includes('original') && localStorage.getItem(key) === text), raw));
+      const originals = () => recovery.evaluate(text => Object.keys(localStorage)
+        .filter(key => key.startsWith('hydraulic-lab-project-v1-original-') && localStorage.getItem(key) === text).sort(), raw);
+      const firstLaunch = await originals();
+      assert.equal(firstLaunch.length, 1);
+      await recovery.reload({ waitUntil: 'networkidle' });
+      await recovery.waitForFunction(() => !!window.hydraulicLab);
+      assert.deepEqual(await originals(), firstLaunch);
+      assert.equal(await recovery.evaluate(() => localStorage.getItem('hydraulic-lab-project-v1')), raw);
+      assert.equal(await recovery.locator('#recover-original').isVisible(), true);
     } finally { await recoveryContext.close(); }
   });
 
