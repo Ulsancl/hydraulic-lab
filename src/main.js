@@ -1,5 +1,7 @@
 import './style.css';
 import './detail.css';
+import { supportsAutosaveLock, withAutosaveLock, writeIfUnchanged } from './browser-autosave.js';
+import { createAutosaveUI, getBrowserLocks, readBrowserDraft } from './autosave-ui.js';
 import { hydraulicDetail } from './detail-model.js';
 import { renderHydraulicDetails } from './detail-panel.js';
 import { createExperiment, setCommand, reconfigureExperiment, instantSnapshot, step as modelStep, MAX_STEP_SECONDS, MAX_SIMULATION_TIME_S } from './model.js';
@@ -13,13 +15,14 @@ const $$ = selector => [...document.querySelectorAll(selector)];
 const STORAGE_KEY = 'hydraulic-lab-project-v1';
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const desktop = window.hydraulicDesktop;
+const browserLocks = desktop ? null : getBrowserLocks();
 const commands = { extend: '전진', neutral: '중립', retract: '후진' };
 const statuses = { neutral: '중립 순환', moving: '이동 중', 'pressure-limit': '압력 한계로 정지', 'end-stop': '행정 끝 도달' };
 let state = createExperiment(), snapshot = instantSnapshot(state), view = normalizeView(DEFAULT_VIEW), playbackRate = 1;
 let scene, running = false, busy = false, restoring = false, focused = false, lessonId = null, externalClock = false;
 let guide = null, guideRenderKey = null;
 let initialCamera = null, previousExperiment = null, recoveredRaw = null, storageBlocked = false;
-let lastPrimary = null;
+let lastPrimary = null, browserAutosave = null, unreadableStorage = false;
 let saveTimer, toastTimer, lastFrame = performance.now(), lastReadout = 0, lastAutosave = 0;
 
 const number = (value, digits = 2) => (Math.abs(value) < .5 * 10 ** -digits ? 0 : value).toLocaleString('ko-KR', { minimumFractionDigits: digits, maximumFractionDigits: digits });
@@ -34,31 +37,43 @@ function toast(message) {
 function capture() {
   return createProject({ state, playbackRate, view, camera: scene?.getCameraState() ?? initialCamera });
 }
+const currentProjectText = () => serializeProject(capture());
 function saveLocal() {
   clearTimeout(saveTimer);
-  if (storageBlocked || restoring) return;
+  if (restoring) return;
+  if (!desktop) {
+    browserAutosave?.markDirty();
+    if (!storageBlocked) browserAutosave?.flush();
+    return;
+  }
+  if (storageBlocked) return;
   try {
-    // A delayed autosave or beforeunload from this tab must not replace a
-    // different experiment another tab has saved since our last write.
-    if (localStorage.getItem(STORAGE_KEY) !== lastPrimary) {
+    const next = currentProjectText();
+    if (!writeIfUnchanged(localStorage, STORAGE_KEY, lastPrimary, next)) {
       storageBlocked = true;
       text('#save-status', '다른 창에서 저장이 변경되었습니다 · 이 창의 실험은 파일로 보관하세요');
       return;
     }
-    const next = serializeProject(capture());
-    localStorage.setItem(STORAGE_KEY, next); lastPrimary = next;
+    lastPrimary = next;
     text('#save-status', '이 기기에 자동 저장됨');
   } catch { text('#save-status', '자동 저장을 완료하지 못했습니다 · 실험 파일로 보관하세요'); }
 }
 function scheduleSave() {
-  if (restoring || storageBlocked) return;
+  if (restoring) return;
+  browserAutosave?.markDirty();
+  if (storageBlocked || (!desktop && !browserAutosave?.canSave())) return;
   clearTimeout(saveTimer); saveTimer = setTimeout(saveLocal, 220);
+}
+function flushBrowserOnHide() {
+  if (restoring) return;
+  clearTimeout(saveTimer);
+  browserAutosave?.onHide();
 }
 function protectOriginal(raw, futureVersion) {
   // Keep the original primary key untouched for corrupt as well as future data.
   // A backup is extra protection; successful backup does not authorize overwrite.
   recoveredRaw = raw; storageBlocked = true;
-  try {
+  const archive = () => {
     const prefix = STORAGE_KEY + '-original-';
     const archived = Object.keys(localStorage).some(key => key.startsWith(prefix) && localStorage.getItem(key) === raw);
     if (!archived) {
@@ -66,7 +81,14 @@ function protectOriginal(raw, futureVersion) {
       while (localStorage.getItem(prefix + id) !== null) id++;
       localStorage.setItem(prefix + id, raw);
     }
-  } catch { /* The primary original remains untouched, even at quota. */ }
+  };
+  if (desktop) { try { archive(); } catch { /* Keep the primary original. */ } }
+  else if (supportsAutosaveLock(browserLocks)) {
+    void withAutosaveLock(browserLocks, STORAGE_KEY, archive).catch(() => {
+      // The primary and its recoverable bytes remain available even if archiving failed.
+      browserAutosave?.report('failed');
+    });
+  }
   $('#storage-recovery').hidden = false;
   if (futureVersion) {
     text('#storage-recovery strong', '더 새로운 버전에서 저장한 실험입니다.');
@@ -84,7 +106,14 @@ try {
       snapshot = instantSnapshot(state);
     } catch (error) { protectOriginal(raw, error.futureVersion); }
   }
-} catch { storageBlocked = true; text('#save-status', '자동 저장을 사용할 수 없습니다 · 실험 파일로 보관하세요'); }
+} catch { storageBlocked = true; unreadableStorage = true; text('#save-status', '자동 저장을 사용할 수 없습니다 · 실험 파일로 보관하세요'); }
+
+const tabDraft = desktop ? null : readBrowserDraft({ key: STORAGE_KEY, locks: browserLocks, expected: lastPrimary, allowResume: !storageBlocked, decode: parseProject });
+if (tabDraft?.restored) {
+  state = tabDraft.restored.state;
+  ({ view, playbackRate, camera: initialCamera } = tabDraft.restored.observation);
+  snapshot = instantSnapshot(state);
+}
 
 function syncPlayback() {
   text('#play', running ? 'Ⅱ 일시정지' : '▶ 재생');
@@ -198,6 +227,7 @@ function advance(seconds) {
   if (state.timeS + seconds > MAX_SIMULATION_TIME_S) throw new RangeError('실험 시간은 1,000,000,000초 이하여야 합니다.');
   // Long foreground frames are partitioned to the pure model's input limit;
   // no elapsed time is discarded, including the relief interval at a stop.
+  if (seconds > 0) browserAutosave?.markDirty();
   let remaining = seconds;
   while (remaining > 0) {
     const duration = Math.min(remaining, MAX_STEP_SECONDS);
@@ -371,11 +401,11 @@ async function saveFile() {
   if (busy) return;
   stop(); setBusy(true);
   try {
-    const contents = serializeProject(capture()), name = `hydraulic-lab-${new Date().toISOString().slice(0, 10)}.json`;
+    const contents = currentProjectText(), name = `hydraulic-lab-${new Date().toISOString().slice(0, 10)}.json`;
     if (desktop) {
       const result = await desktop.saveProject({ contents, name });
       if (result.canceled) { toast('저장을 취소했습니다. 현재 실험은 그대로 유지합니다.'); return; }
-    } else browserDownload(contents, name);
+    } else { browserDownload(contents, name); browserAutosave?.markExported(contents); }
     saveLocal(); toast('압력·누적 에너지·관찰 시점을 실험 파일에 저장했습니다.');
   } catch (error) { toast(`저장하지 못했습니다. ${error.message}`); }
   finally { setBusy(false); }
@@ -465,6 +495,7 @@ try {
   $('#focus-part-inline').addEventListener('click', focusSelectedPart);
   $('#focus-view').addEventListener('click', focusView);
   $('#new-project').addEventListener('click', newExperiment);
+  $('#export-unsaved-project').addEventListener('click', saveFile);
   $('#save-project').addEventListener('click', saveFile); $('#open-project').addEventListener('click', openFile);
   $('#file-input').addEventListener('change', readBrowserFile);
   $('#help').addEventListener('click', showHelp); $('#close-help').addEventListener('click', () => $('#help-dialog').close());
@@ -483,8 +514,15 @@ try {
     if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || event.isComposing || event.target.isContentEditable) return;
     if (event.code === 'Space' && !event.repeat && !event.target.closest('input,select,textarea,button,summary,[role="button"],dialog') && !$('#help-dialog').open) { event.preventDefault(); toggle(); }
   });
-  document.addEventListener('visibilitychange', () => { if (document.hidden) { stop(); saveLocal(); } lastFrame = performance.now(); });
-  window.addEventListener('beforeunload', saveLocal);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      if (desktop || running) stop();
+      if (desktop) saveLocal(); else flushBrowserOnHide();
+    }
+    lastFrame = performance.now();
+  });
+  if (desktop) window.addEventListener('beforeunload', saveLocal);
+  else window.addEventListener('pagehide', flushBrowserOnHide);
 
   window.hydraulicLab = {
     getState: () => structuredClone({ state, snapshot: instantSnapshot(state), view, playbackRate, running, detail: hydraulicDetail(state), focused }),
@@ -504,7 +542,16 @@ try {
     refresh(true, duration);
   };
   window.render_game_to_text = () => JSON.stringify({ coordinateSystem: 'SI m/s/Pa/m³/N/W/J; +X cylinder extension; gauge pressure relative to tank; quasi-static model', ...window.hydraulicLab.getState() });
-  saveLocal();
+  if (desktop) saveLocal();
+  else {
+    browserAutosave = createAutosaveUI({
+      key: STORAGE_KEY, locks: browserLocks, expected: lastPrimary, baseline: tabDraft.restored ? null : currentProjectText(),
+      capture: currentProjectText, status: $('#save-status'), maySave: () => !restoring && !storageBlocked,
+      interruptedDraft: tabDraft.interrupted, downloadDraft: raw => browserDownload(raw, 'hydraulic-lab-interrupted.json'),
+    });
+    if (unreadableStorage || !browserAutosave.canSave()) browserAutosave.report('unavailable');
+    else if (tabDraft.restored) saveLocal();
+  }
   function frame(now) {
     const elapsed = Math.max(0, (now - lastFrame) / 1000); lastFrame = now;
     let advanced = 0;
