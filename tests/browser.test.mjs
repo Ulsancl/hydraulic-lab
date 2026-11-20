@@ -272,6 +272,31 @@ try {
     await visualContext.close();
   });
 
+  check('exporting and closing a stale tab preserves both observations', async () => {
+    const tabs = await browser.newContext({ acceptDownloads: true });
+    const key = 'hydraulic-lab-project-v1';
+    const openTab = async () => {
+      const tab = await tabs.newPage();
+      await tab.goto('http://127.0.0.1:5200/', { waitUntil: 'domcontentloaded' });
+      await tab.waitForFunction(() => !!window.hydraulicLab);
+      return tab;
+    };
+    try {
+      const stale = await openTab();
+      await stale.evaluate(() => window.hydraulicLab.step(1));
+      const current = await openTab();
+      await current.evaluate(() => window.hydraulicLab.step(2));
+      const newest = await current.evaluate(key => localStorage.getItem(key), key);
+      assert.equal(JSON.parse(newest).state.timeS, 3);
+      const pending = stale.waitForEvent('download'); await stale.locator('#save-project').click();
+      const download = await pending;
+      const exported = JSON.parse(await fs.readFile(await download.path(), 'utf8'));
+      assert.equal(exported.state.timeS, 1);
+      const closed = stale.waitForEvent('close');
+      await stale.close({ runBeforeUnload: true }); await closed;
+      assert.equal(await current.evaluate(key => localStorage.getItem(key), key), newest);
+    } finally { await tabs.close(); }
+  });
   await check('the application uses local assets and reports no browser errors', async () => {
     assert.deepEqual(errors, []); assert.deepEqual(externalRequests, []);
   });

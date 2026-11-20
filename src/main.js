@@ -19,6 +19,7 @@ let state = createExperiment(), snapshot = instantSnapshot(state), view = normal
 let scene, running = false, busy = false, restoring = false, focused = false, lessonId = null, externalClock = false;
 let guide = null, guideRenderKey = null;
 let initialCamera = null, previousExperiment = null, recoveredRaw = null, storageBlocked = false;
+let lastPrimary = null;
 let saveTimer, toastTimer, lastFrame = performance.now(), lastReadout = 0, lastAutosave = 0;
 
 const number = (value, digits = 2) => (Math.abs(value) < .5 * 10 ** -digits ? 0 : value).toLocaleString('ko-KR', { minimumFractionDigits: digits, maximumFractionDigits: digits });
@@ -37,7 +38,15 @@ function saveLocal() {
   clearTimeout(saveTimer);
   if (storageBlocked || restoring) return;
   try {
-    localStorage.setItem(STORAGE_KEY, serializeProject(capture()));
+    // A delayed autosave or beforeunload from this tab must not replace a
+    // different experiment another tab has saved since our last write.
+    if (localStorage.getItem(STORAGE_KEY) !== lastPrimary) {
+      storageBlocked = true;
+      text('#save-status', '다른 창에서 저장이 변경되었습니다 · 이 창의 실험은 파일로 보관하세요');
+      return;
+    }
+    const next = serializeProject(capture());
+    localStorage.setItem(STORAGE_KEY, next); lastPrimary = next;
     text('#save-status', '이 기기에 자동 저장됨');
   } catch { text('#save-status', '자동 저장을 완료하지 못했습니다 · 실험 파일로 보관하세요'); }
 }
@@ -67,6 +76,7 @@ function protectOriginal(raw, futureVersion) {
 }
 try {
   const raw = localStorage.getItem(STORAGE_KEY);
+  lastPrimary = raw;
   if (raw !== null) {
     try {
       const saved = parseProject(raw);
