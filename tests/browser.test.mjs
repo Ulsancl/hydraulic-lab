@@ -272,7 +272,7 @@ try {
     await visualContext.close();
   });
 
-  check('exporting and closing a stale tab preserves both observations', async () => {
+  await check('exporting and closing a stale tab preserves both observations', async () => {
     const tabs = await browser.newContext({ acceptDownloads: true });
     const key = 'hydraulic-lab-project-v1';
     const openTab = async () => {
