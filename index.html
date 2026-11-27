@@ -12,10 +12,10 @@
       <a class="brand" href="#workspace" aria-label="Hydraulic Lab 작업 공간"><span class="brand-mark" aria-hidden="true">H<span>↔</span></span><span><strong>HYDRAULIC <b>LAB</b></strong><small>유압 구조 실험실</small></span></a>
       <div class="header-note">구조를 열고, 흐름을 읽다<span>복동 실린더 · 탠덤 중립 회로</span></div>
       <nav class="file-actions" aria-label="실험 파일">
-        <button id="new-project" type="button">새 실험</button>
-        <button id="open-project" type="button">열기</button>
-        <button id="save-project" type="button">파일 저장</button>
-        <button id="help" type="button" class="help-button" aria-label="사용 안내">?</button>
+        <button id="new-project" type="button" aria-label="새 실험" title="새 실험"><svg class="file-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg><span>새 실험</span></button>
+        <button id="open-project" type="button" aria-label="열기" title="열기"><svg class="file-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 19V6a1 1 0 0 1 1-1h5l2 2h8a1 1 0 0 1 1 1v3M3 19h16l3-8H6Z" /></svg><span>열기</span></button>
+        <button id="save-project" type="button" aria-label="파일 저장" title="파일 저장"><svg class="file-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 16v4h16v-4" /></svg><span>파일 저장</span></button>
+        <button id="help" type="button" class="help-button" aria-label="사용 안내" title="사용 안내">?</button>
       </nav>
       <input id="file-input" type="file" accept=".json,application/json" hidden />
     </header>
@@ -42,6 +42,11 @@
           <div class="scene-legend"><span><i class="legend-low"></i>0 bar</span><span><i class="legend-high"></i>100 bar</span><span>→ 유량 방향</span></div>
           <p id="scene-error" class="scene-error" hidden></p>
         </div>
+        <div class="mobile-part-picker">
+          <label for="mobile-part-select">부품 선택</label>
+          <select id="mobile-part-select"></select>
+          <button id="show-part-details" type="button" aria-controls="parts-disclosure">설명 보기</button>
+        </div>
         <div class="layer-toolbar" role="group" aria-label="구조 표시">
           <label><input type="checkbox" data-layer="housing" checked /> 외피</label><label><input type="checkbox" data-layer="seals" checked /> 씰·가이드</label><label><input type="checkbox" data-layer="paths" checked /> 배관</label>
           <span class="toolbar-divider"></span><label><input id="labels" type="checkbox" checked /> 이름표</label><label><input id="pressure-colors" type="checkbox" checked /> 압력 색</label><label><input id="flow-arrows" type="checkbox" checked /> 유량 화살표</label>
@@ -51,7 +56,7 @@
           <div class="time-control"><button id="play" type="button" class="primary">▶ 재생</button><button id="step" type="button" title="모형 시간 0.1초 진행">+0.1초</button><label for="playback-rate">관찰 속도 <select id="playback-rate"><option value="0.1">0.1×</option><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label></div>
         </div>
         <div class="transport-note"><p>일시정지는 <strong>관찰 시간</strong>을 멈춥니다. 중립에서도 펌프는 탱크로 순환합니다.</p><span id="elapsed-time">0.00 s</span></div>
-        <div id="guide-cue" class="guide-cue" hidden><div><strong id="guide-cue-status"></strong><p id="guide-cue-action"></p></div><button id="guide-details" type="button">안내·결과 보기</button></div>
+        <div id="guide-cue" class="guide-cue" hidden><div><strong id="guide-cue-status"></strong><p id="guide-cue-action"></p></div><button id="guide-details" type="button" aria-controls="lesson-guide">안내·결과 보기</button></div>
       </section>
 
       <aside class="experiment-panel panel" aria-label="실험 조건과 안내">
@@ -73,7 +78,7 @@
         <div class="lesson-section"><details id="lesson-picker" open><summary id="lesson-picker-title">어디부터 볼까요?</summary><p class="muted">세 가지 짧은 실험으로 원리를 발견하세요.</p>
           <div class="lesson-list"><button type="button" data-lesson="speed-ratio"><span>01</span><div>같은 유량, 다른 속도<small>면적과 속도의 관계</small></div><b>↗</b></button><button type="button" data-lesson="pressure-limit"><span>02</span><div>속도와 힘의 한계<small>멈춘 실린더, 흐르는 오일</small></div><b>↗</b></button><button type="button" data-lesson="neutral-hold"><span>03</span><div>움직임이 멈춘 뒤의 압력<small>순환과 고립을 구분하기</small></div><b>↗</b></button></div>
           </details>
-          <div id="lesson-guide" class="lesson-guide" hidden><div class="guide-heading"><span class="eyebrow">GUIDED EXPERIMENT</span><strong id="guide-status" role="status"></strong></div><h3 id="lesson-title"></h3><p id="lesson-question"></p><progress id="guide-progress" value="0" max="3" aria-label="실제로 확인된 안내 단계"></progress><ol id="lesson-steps"></ol><div class="guide-next"><span>다음 조작</span><p id="guide-action"></p></div><div class="guide-evidence"><span>실제로 확인한 결과</span><p id="guide-result"></p></div><div class="guide-buttons"><button id="guide-restart" type="button">안내 다시 시작</button><button id="guide-exit" type="button">자유 탐구로 전환</button></div><p class="field-help">안내 진행은 파일에 저장하지 않습니다. 실험을 불러오거나 새로 만들면 안내가 종료됩니다.</p></div>
+          <details id="lesson-guide" class="lesson-guide" open hidden><summary><span class="guide-heading"><span>실험 진행 안내</span><strong id="guide-status" role="status"></strong></span></summary><h3 id="lesson-title"></h3><p id="lesson-question"></p><progress id="guide-progress" value="0" max="3" aria-label="실제로 확인된 안내 단계"></progress><ol id="lesson-steps"></ol><div class="guide-next"><span>다음 조작</span><p id="guide-action"></p></div><div class="guide-evidence"><span>실제로 확인한 결과</span><p id="guide-result"></p></div><div class="guide-buttons"><button id="guide-restart" type="button">안내 다시 시작</button><button id="guide-exit" type="button">자유 탐구로 전환</button></div><p class="field-help">안내 진행은 파일에 저장하지 않습니다. 실험을 불러오거나 새로 만들면 안내가 종료됩니다.</p></details>
         </div>
       </aside>
 
@@ -121,8 +126,10 @@
       </section>
 
       <section class="components-panel panel" aria-label="부품 탐색">
-        <div class="section-heading"><span class="eyebrow">05 / ANATOMY</span><h2>부품 하나에서 회로 전체로</h2></div>
+        <details id="parts-disclosure" open>
+        <summary class="section-heading"><h2><span class="eyebrow">05 / ANATOMY</span>부품 하나에서 회로 전체로</h2></summary>
         <div class="component-layout"><div class="part-selector"><label for="part-select">살펴볼 부품</label><select id="part-select"></select><div id="component-shortcuts" class="component-shortcuts"><button type="button" data-part="piston">피스톤</button><button type="button" data-part="directional-spool">스풀</button><button type="button" data-part="relief-poppet">릴리프</button><button type="button" data-part="rod-seal">로드 씰</button><button type="button" data-part="pump">펌프</button><button type="button" data-part="tank-oil">오일</button></div></div><div class="part-detail"><span id="part-material" class="eyebrow"></span><h3 id="part-title">피스톤</h3><p id="part-description"></p><button id="focus-part" type="button">선택 부품 가까이 보기 ↗</button><small>부품 선택은 실험 상태와 카메라를 바꾸지 않습니다.</small><section class="component-observations" aria-label="선택 부품의 현재 계산값"><p id="detail-reference" class="detail-reference"></p><dl id="part-detail-facts" class="detail-facts"></dl><p id="part-detail-note" class="detail-note"></p></section></div></div>
+        </details>
       </section>
     </main>
     <footer class="app-footer"><p>교육용 준정상 유압 모형 · 비압축성 · 무관성 · 복귀 저항 조절</p><span id="save-status">이 기기에 자동 저장</span></footer>

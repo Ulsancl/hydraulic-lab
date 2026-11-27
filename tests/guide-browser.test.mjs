@@ -41,7 +41,7 @@ async function stage(expected, status = 'active') {
 
 try {
   const origin = new Date('2026-10-01T00:00:00Z');
-  await page.clock.install({ time: origin }); await page.clock.pauseAt(origin);
+  await page.clock.install({ time: origin }); await page.clock.pauseAt(new Date(origin.getTime() + 60_000));
   await page.goto('http://127.0.0.1:5201/', { waitUntil: 'networkidle' });
   await page.waitForFunction(() => Boolean(window.hydraulicLab?.guide));
   await page.clock.runFor(100);
@@ -152,6 +152,7 @@ try {
       await realPage.screenshot({ path: path.join(output, 'guide-speed.png'), fullPage: true });
       for (const width of [1024, 390]) {
         await realPage.setViewportSize({ width, height: 1000 });
+        if (width === 390) await realPage.locator('#guide-details').click();
         await realPage.locator('#guide-action').scrollIntoViewIfNeeded();
         await realPage.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
         assert(await realPage.locator('#guide-restart').isVisible()); assert(await realPage.locator('#guide-exit').isVisible());
@@ -160,6 +161,65 @@ try {
       }
     } finally { await realContext.close(); }
   });
+  await check('500px touch layout keeps parts, guides and file actions reachable', async () => {
+    const mobile = await browser.newContext({ viewport: { width: 500, height: 900 }, hasTouch: true, reducedMotion: 'reduce', acceptDownloads: true });
+    const touch = await mobile.newPage(); watch(touch);
+    try {
+      await touch.goto('http://127.0.0.1:5201/');
+      await touch.waitForFunction(() => window.hydraulicLab?.sceneDebug().drawCalls > 0);
+      const current = () => touch.evaluate(() => window.hydraulicLab.getState());
+      const saved = () => touch.evaluate(() => window.hydraulicLab.project());
+      const action = name => touch.getByRole('navigation', { name: '실험 파일' }).getByRole('button', { name, exact: true });
+      assert.equal(await touch.evaluate(() => document.documentElement.scrollWidth), 500);
+      for (const id of ['#lesson-picker', '#parts-disclosure', '.balance-observation']) {
+        assert.equal(await touch.locator(id).evaluate(node => node.open), false);
+      }
+      const labels = touch.locator('.hydraulic-part-label:visible'), count = await labels.count();
+      assert(count >= 2 && count <= 3);
+      const spool = labels.getByText('3위치 스풀', { exact: true });
+      const before = await saved();
+      await spool.tap();
+      assert.equal(await spool.getAttribute('aria-pressed'), 'true');
+      const picker = touch.getByRole('combobox', { name: '부품 선택' });
+      assert.equal(await picker.inputValue(), 'directional-spool');
+      await picker.selectOption('rod-seal');
+      assert.equal((await current()).view.selectedPart, 'rod-seal');
+      assert.deepEqual((await current()).state, before.state);
+      assert.deepEqual((await saved()).observation.camera, before.observation.camera);
+      await touch.getByRole('button', { name: '설명 보기' }).tap();
+      const parts = touch.locator('#parts-disclosure');
+      assert.equal(await parts.evaluate(node => node.open), true);
+      assert.equal(await touch.locator('#part-select').inputValue(), 'rod-seal');
+      assert(await parts.evaluate(node => document.activeElement === node.querySelector('summary')));
+      await touch.keyboard.press('Space');
+      assert.equal(await parts.evaluate(node => node.open), false);
+      assert.equal((await current()).running, false);
+
+      await touch.locator('#lesson-picker > summary').tap();
+      await touch.locator('[data-lesson="speed-ratio"]').tap();
+      assert.equal(await touch.locator('#lesson-guide').evaluate(node => node.open), false);
+      await touch.getByRole('button', { name: '안내·결과 보기' }).tap();
+      await touch.locator('#guide-restart').waitFor();
+      assert(await touch.locator('#guide-result').isVisible());
+
+      const expected = await saved(), download = touch.waitForEvent('download');
+      await action('파일 저장').tap();
+      const downloadFile = path.join(output, 'mobile-experiment.json');
+      await (await download).saveAs(downloadFile);
+      await action('새 실험').focus();
+      await touch.keyboard.press('Enter');
+      assert.notDeepEqual(await saved(), expected);
+      const open = touch.waitForEvent('filechooser');
+      await action('열기').tap();
+      await (await open).setFiles(downloadFile);
+      await touch.waitForFunction(expected => JSON.stringify(window.hydraulicLab.project()) === JSON.stringify(expected), expected);
+      await action('사용 안내').tap();
+      assert(await touch.getByRole('dialog', { name: '유압을 처음 만난다면' }).isVisible());
+      await touch.keyboard.press('Escape');
+      assert(await action('사용 안내').evaluate(node => document.activeElement === node));
+    } finally { await mobile.close(); }
+  });
+
   await check('guided journeys have no runtime errors or external requests', async () => { assert.deepEqual(errors, []); assert.deepEqual(externalRequests, []); });
   await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: 'PASSED', checks, errors, externalRequests }, null, 2));
 } catch (error) {

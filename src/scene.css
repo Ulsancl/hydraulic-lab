@@ -15,3 +15,6 @@
 @media (max-width: 600px) { .hydraulic-part-label { font-size: 10px; padding-inline: 5px; } .hydraulic-scene-note { width: max-content; max-width: calc(100% - 20px); font-size: 10px; bottom: 46px; } }
 @media (max-width: 500px) { .hydraulic-scene-note.is-scale { right: 10px; bottom: 10px; font-size: 9px; } }
 @media (max-width: 360px) { .hydraulic-scene-note.is-scale { bottom: 39px; } }
+.hydraulic-part-label, .hydraulic-scene-note { font-family: inherit; }
+.hydraulic-label-layer.is-narrow .hydraulic-part-label { height: 32px; min-height: 32px; padding-inline: 5px; font-size: 10px; line-height: 30px; }
+.hydraulic-label-layer.is-narrow .hydraulic-label-lines path:not(.is-selected) { stroke: #b9d0db55; }

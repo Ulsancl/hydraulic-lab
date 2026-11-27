@@ -19,6 +19,9 @@ const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const RETURN_RESISTANCE_PER_BAR = 1e5 / RETURN_REFERENCE_FLOW_M3S;
 const desktop = window.hydraulicDesktop;
 const browserLocks = desktop ? null : getBrowserLocks();
+const narrowLayout = window.matchMedia('(max-width: 500px)');
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+const partSelectors = $$('#part-select, #focus-part-select, #mobile-part-select');
 const commands = { extend: '전진', neutral: '중립', retract: '후진' };
 const statuses = { neutral: '중립 순환', moving: '이동 중', 'pressure-limit': '압력 한계로 정지', 'end-stop': '행정 끝 도달' };
 let state = createExperiment(), snapshot = instantSnapshot(state), view = normalizeView(DEFAULT_VIEW), playbackRate = 1;
@@ -162,7 +165,7 @@ function syncControls({ settings = false } = {}) {
   $$('[data-layer]').forEach(input => { input.checked = view.layers[input.dataset.layer]; });
   $('#explode').value = view.explode; $('#explode').disabled = view.mode !== 'exploded';
   $('#labels').checked = view.labels; $('#pressure-colors').checked = view.pressureColors; $('#flow-arrows').checked = view.flowArrows;
-  $('#part-select').value = view.selectedPart;
+  for (const selector of partSelectors) selector.value = view.selectedPart;
   const rate = $('#playback-rate');
   rate.querySelector('[data-custom]')?.remove();
   if (![...rate.options].some(option => Number(option.value) === playbackRate)) {
@@ -176,12 +179,33 @@ function rememberExperiment() {
   previousExperiment = { project: capture(), guide: structuredClone(guide) };
   $('#undo-new').hidden = false;
 }
+function showDisclosure(selector) {
+  const disclosure = $(selector);
+  disclosure.open = true;
+  const summary = disclosure.querySelector('summary');
+  summary.focus({ preventScroll: true });
+  summary.scrollIntoView({ block: 'center', behavior: reducedMotion.matches ? 'auto' : 'smooth' });
+}
+function syncDisclosureDefaults() {
+  const defaults = [
+    ['#lesson-picker', !lessonId],
+    ['#lesson-guide', Boolean(lessonId)],
+    ['.balance-observation', true],
+    ['#parts-disclosure', true],
+  ];
+  for (const [selector, desktopOpen] of defaults) {
+    const disclosure = $(selector);
+    if (!disclosure.contains(document.activeElement)) disclosure.open = !narrowLayout.matches && desktopOpen;
+  }
+}
 function showLesson(id, restoredGuide = null) {
   lessonId = id;
   const lesson = LESSONS.find(item => item.id === id);
   guide = lesson ? structuredClone(restoredGuide ?? createGuide(id)) : null; guideRenderKey = null;
-  $('#lesson-guide').hidden = !lesson;
-  $('#lesson-picker').open = !lesson;
+  const guidePanel = $('#lesson-guide');
+  guidePanel.hidden = !lesson;
+  guidePanel.open = Boolean(lesson) && !narrowLayout.matches;
+  $('#lesson-picker').open = !lesson && !narrowLayout.matches;
   text('#lesson-picker-title', lesson ? '다른 실험 고르기' : '어디부터 볼까요?');
   if (lesson) {
     text('#lesson-title', lesson.title); text('#lesson-question', lesson.question);
@@ -220,6 +244,7 @@ function startLesson(id) {
   rememberExperiment(); stop();
   state = setCommand(createExperiment(lesson.settings, { positionM: lesson.positionM }), lesson.initialCommand);
   showLesson(id); syncControls({ settings: true }); refresh(true); saveLocal();
+  if (narrowLayout.matches) $('#lesson-guide > summary').focus();
   toast(`“${lesson.title}” 준비 완료. 재생을 누르고 안내 순서대로 관찰하세요.`);
 }
 function changeCommand(command) {
@@ -457,10 +482,12 @@ function showHelp() { stop(); if (!$('#help-dialog').open) $('#help-dialog').sho
 try {
   restoring = true;
   scene = new HydraulicScene($('#scene'), { onSelect: selectPart, onCameraChange: () => { if (!restoring) scheduleSave(); } });
-  $('#part-select').replaceChildren(...scene.getComponents().map(part => {
-    const option = document.createElement('option'); option.value = part.id; option.textContent = part.name; return option;
-  }));
-  $('#focus-part-select').replaceChildren(...[...$('#part-select').options].map(option => option.cloneNode(true)));
+  for (const selector of partSelectors) {
+    selector.replaceChildren(...scene.getComponents().map(part => new Option(part.name, part.id)));
+    selector.addEventListener('change', event => selectPart(event.target.value));
+  }
+  syncDisclosureDefaults();
+  narrowLayout.addEventListener('change', syncDisclosureDefaults);
   syncControls({ settings: true }); refresh(true);
   if (initialCamera) scene.setCameraState(initialCamera);
   else scene.resetCamera();
@@ -492,12 +519,14 @@ try {
   $$('[data-lesson]').forEach(button => button.addEventListener('click', () => startLesson(button.dataset.lesson)));
   $('#guide-restart').addEventListener('click', () => { if (lessonId) startLesson(lessonId); });
   $('#guide-exit').addEventListener('click', () => {
-    showLesson(null); syncControls(); toast('안내를 종료했습니다. 현재 실험 상태를 유지하며 자유롭게 탐구할 수 있습니다.');
+    showLesson(null); syncControls(); $('#lesson-picker > summary').focus();
+    toast('안내를 종료했습니다. 현재 실험 상태를 유지하며 자유롭게 탐구할 수 있습니다.');
   });
   $('#guide-details').addEventListener('click', () => {
     if (focused) focusView();
-    requestAnimationFrame(() => { $('#lesson-guide').scrollIntoView({ block: 'center', behavior: 'smooth' }); $('#guide-restart').focus({ preventScroll: true }); });
+    requestAnimationFrame(() => showDisclosure('#lesson-guide'));
   });
+  $('#show-part-details').addEventListener('click', () => showDisclosure('#parts-disclosure'));
   $$('[data-mode]').forEach(button => button.addEventListener('click', () => { view.mode = button.dataset.mode; syncControls(); refresh(true); scheduleSave(); }));
   $('#explode').addEventListener('input', event => { view.explode = Number(event.target.value); refresh(true); scheduleSave(); });
   $$('[data-layer]').forEach(input => input.addEventListener('change', () => { view.layers[input.dataset.layer] = input.checked; refresh(true); scheduleSave(); }));
@@ -505,8 +534,6 @@ try {
     $(`#${id}`).addEventListener('change', event => { view[key] = event.target.checked; refresh(true); scheduleSave(); });
   }
   $('#playback-rate').addEventListener('change', event => { playbackRate = normalizePlaybackRate(Number(event.target.value)); syncPlayback(); scheduleSave(); });
-  $('#part-select').addEventListener('change', event => selectPart(event.target.value));
-  $('#focus-part-select').addEventListener('change', event => selectPart(event.target.value));
   document.addEventListener('click', event => { const part = event.target.closest('[data-part]'); if (part) selectPart(part.dataset.part); });
   $$('svg [data-part]').forEach(element => element.addEventListener('keydown', event => {
     if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.isComposing || event.target.isContentEditable) return;
