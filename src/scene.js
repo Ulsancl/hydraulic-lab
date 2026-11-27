@@ -1,14 +1,18 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { COMPONENTS, GEOMETRY_SI as D, SPOOL_GEOMETRY as S, PORTS, CIRCUIT_ROUTES, cylinderGeometry, tankGeometry, spoolGeometry } from './geometry.js';
 import { PUMP_DETAIL, RELIEF_DETAIL, reliefConeY, pumpHousingGeometry, pumpCoverGeometry, pumpGearGeometry, pumpRadialClearanceBound, reliefHousingGeometry, reliefSeatGeometry, reliefPoppetGeometry, engineeringFinish } from './mechanical-geometry.js';
+import { hoseCurve, hosePressureBand, flowArrowGeometry } from './scene-hoses.js';
 import './scene.css';
 
 const TAU = Math.PI * 2;
 const V = a => new THREE.Vector3(...a);
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 const ordinary = value => Object.is(value, -0) ? 0 : value;
+const FLOW_THRESHOLD_M3S = 1e-12;
+const ARROW_SPEED_MPS = .085;
 const DEFAULT_VIEW = { mode: 'cutaway', explode: .35, labels: true, layers: { housing: true, seals: true, paths: true }, selectedPart: 'piston', pressureColors: true, flowArrows: true };
 
 // A closed annular sector along X: the inner wall and cut faces are real surfaces.
@@ -89,6 +93,7 @@ function roundedPath(points, radius = .016) {
 export class HydraulicScene {
   constructor(container, { onSelect = () => {}, onCameraChange = () => {} } = {}) {
     this.container = container; this.onSelect = onSelect; this.onCameraChange = onCameraChange;
+    this.reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
     this.disposed = false; this.updating = false; this.view = structuredClone(DEFAULT_VIEW);
     this.components = new Map(); this.geometries = new Set(); this.materials = new Set(); this.textures = new Set(); this.housings = []; this.sealParts = []; this.routes = []; this.highlighted = [];
     this.scene = new THREE.Scene(); this.scene.background = new THREE.Color('#162633');
@@ -137,15 +142,22 @@ export class HydraulicScene {
       chrome: this.material({ color: '#dce7ec', metalness: .98, roughness: .13, side: THREE.DoubleSide }),
       cast: this.material({ color: '#5d7787', metalness: .72, roughness: .48, bumpMap: cast, bumpScale: .00007, side: THREE.DoubleSide }),
       painted: this.material({ color: '#245265', metalness: .58, roughness: .4, side: THREE.DoubleSide }),
+      barrelPaint: this.material({ color: '#9d6b30', metalness: .27, roughness: .5, bumpMap: cast, bumpScale: .000018, side: THREE.DoubleSide }),
+      panel: this.material({ color: '#40505b', metalness: .45, roughness: .55 }),
+      zinc: this.material({ color: '#b6b5a8', metalness: .73, roughness: .34, bumpMap: turned, bumpScale: .000025 }),
       dark: this.material({ color: '#263c49', metalness: .77, roughness: .34, side: THREE.DoubleSide }),
       brass: this.material({ color: '#c7a66a', metalness: .85, roughness: .28, side: THREE.DoubleSide }),
       seal: this.material({ color: '#285e68', metalness: .05, roughness: .6, side: THREE.DoubleSide }),
       rubber: this.material({ color: '#19282f', metalness: .08, roughness: .7, side: THREE.DoubleSide }),
+      hose: this.material({ color: '#1e272b', roughness: .84, bumpMap: cast, bumpScale: .000045 }),
       filter: this.material({ color: '#d8bb86', metalness: .04, roughness: .8, side: THREE.DoubleSide }),
       oil: this.material({ color: '#ccab54', metalness: .08, roughness: .25, transparent: true, opacity: .35, depthWrite: false, side: THREE.DoubleSide }),
       transparent: this.material({ color: '#9bbdc8', metalness: .12, roughness: .35, transparent: true, opacity: .11, depthWrite: false, side: THREE.DoubleSide }),
-      arrow: this.material({ color: '#e8fbff', emissive: '#a6e7e9', emissiveIntensity: .5, roughness: .4 }),
     };
+  }
+  overlayMaterial(color) {
+    const material = new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide, toneMapped: false });
+    this.materials.add(material); return material;
   }
   mesh(geometry, material, parent, position) {
     this.geometries.add(geometry); const mesh = new THREE.Mesh(geometry, material);
@@ -153,6 +165,7 @@ export class HydraulicScene {
     if (position) mesh.position.set(...position); parent.add(mesh); return mesh;
   }
   box(size, material, parent, position) { return this.mesh(new THREE.BoxGeometry(...size), material, parent, position); }
+  plate(size, radius, material, parent, position) { return this.mesh(new RoundedBoxGeometry(...size, 2, radius), material, parent, position); }
   cylinder(radius, length, material, parent, position, axis = 'y', segments = 40) {
     const mesh = this.mesh(new THREE.CylinderGeometry(radius, radius, length, segments), material, parent, position);
     if (axis === 'x') mesh.rotation.z = -Math.PI / 2; else if (axis === 'z') mesh.rotation.x = Math.PI / 2; return mesh;
@@ -196,7 +209,7 @@ export class HydraulicScene {
   buildCylinder() {
     const m = this.mat, y = D.cylinderAxisY, c = cylinderGeometry(.15);
     this.barrel = this.part('cylinder-barrel', [-.14, y + .036, 0]);
-    this.splitSleeve(D.boreRadiusM, D.barrelOuterRadiusM, D.barrelX[1] - D.barrelX[0], m.painted, this.barrel, [(D.barrelX[0] + D.barrelX[1]) / 2, y, 0], [0, .04, .21]);
+    this.splitSleeve(D.boreRadiusM, D.barrelOuterRadiusM, D.barrelX[1] - D.barrelX[0], m.barrelPaint, this.barrel, [(D.barrelX[0] + D.barrelX[1]) / 2, y, 0], [0, .04, .21]);
     this.cap = this.part('cap-end', [-.29, y, 0]);
     this.cylinder(.041, .020, m.cast, this.cap, [-.29, y, 0], 'x');
     this.cylinder(.025, .006, m.steel, this.cap, [-.303, y, 0], 'x');
@@ -205,10 +218,13 @@ export class HydraulicScene {
     for (const x of [-.304, .074]) for (let i = 0; i < 6; i++) { const a = i * TAU / 6; this.bolt(x < 0 ? this.cap : this.gland, [x, y + .035 * Math.cos(a), .035 * Math.sin(a)], 'x'); }
     // The body is supported by saddles bolted into the common test bench.
     for (const x of [-.258, .020]) {
-      this.box([.040, .178, .054], m.dark, this.barrel, [x, .116, -.036]);
+      this.plate([.045, .178, .060], .003, m.dark, this.barrel, [x, .116, -.036]);
       this.sleeve(.036, .043, .026, m.cast, this.barrel, [x, y, 0], Math.PI / 2, Math.PI);
-      this.box([.066, .009, .105], m.cast, this.barrel, [x, .024, -.008]);
-      for (const z of [-.048, .034]) this.bolt(this.barrel, [x, .030, z]);
+      this.plate([.073, .010, .105], .002, m.zinc, this.barrel, [x, .025, -.008]);
+      for (const offset of [-.024, .024]) for (const z of [-.048, .034]) {
+        this.cylinder(.005, .0014, m.steel, this.barrel, [x + offset, .030, z], 'y', 16);
+        this.bolt(this.barrel, [x + offset, .032, z]);
+      }
     }
     this.piston = this.part('piston', [0, 0, .028]);
     this.cylinder(.0296, .018, m.steel, this.piston, [0, 0, 0], 'x');
@@ -233,8 +249,9 @@ export class HydraulicScene {
     this.rodFluid.userData.section = { innerRadiusM: D.rodRadiusM, outerRadiusM: D.boreRadiusM, baseLengthM: 1 };
     this.capFluid.userData.nonPickable = true; this.rodFluid.userData.nonPickable = true;
     this.carriage = this.part('load-carriage', [0, .235, 0]);
-    this.box([.064, .050, .088], m.cast, this.carriage, [0, .183, 0]);
-    this.box([.012, .065, .062], m.steel, this.carriage, [0, .220, 0]);
+    this.plate([.064, .050, .088], .004, m.cast, this.carriage, [0, .183, 0]);
+    this.plate([.012, .065, .062], .002, m.zinc, this.carriage, [0, .220, 0]);
+    for (const x of [-.022, .022]) for (const z of [-.033, .033]) this.bolt(this.carriage, [x, .209, z], 'y', .82);
     // A fork, cross pin, and eye join the chrome rod to the translating carriage.
     for (const z of [-.016, .016]) this.box([.040, .035, .009], m.steel, this.carriage, [-.020, y, z]);
     this.sleeve(.006, .015, .017, m.chrome, this.carriage, [-.040, y, 0], 0, TAU, 'z');
@@ -243,10 +260,15 @@ export class HydraulicScene {
     this.loadGuide = this.part('load-guide', [.34, .147, -.047]);
     for (const z of [-.032, .032]) {
       this.cylinder(.009, .445, m.chrome, this.loadGuide, [.303, .151, z], 'x');
-      for (const x of [.090, .516]) { this.box([.026, .132, .038], m.dark, this.loadGuide, [x, .084, z]); this.bolt(this.loadGuide, [x, .155, z]); }
+      for (const x of [.090, .516]) {
+        this.plate([.026, .132, .038], .002, m.dark, this.loadGuide, [x, .084, z]);
+        this.plate([.027, .027, .040], .002, m.zinc, this.loadGuide, [x, .148, z]);
+        this.bolt(this.loadGuide, [x, .163, z]);
+      }
       this.sleeve(.0092, .014, .060, m.brass, this.carriage, [0, .151, z]);
     }
-    this.box([.456, .012, .110], m.painted, this.loadGuide, [.303, .021, 0]);
+    this.plate([.466, .013, .116], .002, m.panel, this.loadGuide, [.303, .022, 0]);
+    for (const z of [-.051, .051]) this.box([.444, .002, .004], m.zinc, this.loadGuide, [.303, .027, z]);
     this.box([.014, .04, .055], m.dark, this.loadGuide, [.514, .195, 0]);
     // A fixed horizontal friction track identifies a resisting test load, not a hanging weight.
     this.box([.440, .014, .018], m.brass, this.loadGuide, [.303, .184, -.063]);
@@ -270,9 +292,18 @@ export class HydraulicScene {
       this.box([.174, .008, .048], m.cast, back, [0, side * .032, -.011]);
       for (const x of [-.068, .068]) this.bolt(back, [x, side * .037, -.016]);
     }
+    this.plate([.172, .060, .015], .0024, m.painted, back, [0, 0, -.029]);
+    for (const x of [-.074, .074]) {
+      this.plate([.016, .054, .051], .002, m.zinc, front, [x, 0, .015]);
+      for (const y of [-.018, .018]) this.bolt(front, [x, y, .041], 'z', .82);
+    }
     this.housing(back, front, [0, .035, .15]);
-    this.box([.180, .012, .090], m.dark, this.valve, [0, -.070, 0]);
-    for (const x of [-.065, .065]) this.box([.018, .034, .018], m.cast, this.valve, [x, -.048, -.020]);
+    this.plate([.206, .015, .100], .003, m.panel, this.valve, [0, -.070, -.009]);
+    for (const x of [-.086, .086]) for (const z of [-.044, .026]) {
+      this.cylinder(.0052, .0015, m.steel, this.valve, [x, -.062, z], 'y', 16);
+      this.bolt(this.valve, [x, -.0595, z], 'y', .86);
+    }
+    for (const x of [-.064, .064]) this.plate([.024, .035, .039], .002, m.cast, this.valve, [x, -.048, -.022]);
     this.windowMaterials = {}; this.galleryFluids = [];
     // Galleries are wider than the spool bore; each visible rear annulus is connected by drilling.
     for (const w of S.bodyWindows) {
@@ -315,6 +346,13 @@ export class HydraulicScene {
     for (const x of S.radialHoleCentersM) {
       const hole = this.cylinder(.0013, .007, this.bypassMaterial, this.bypass, [x, .0053, 0], 'y', 14); this.radialDrills.push(hole);
     }
+    this.neutralArrows = new THREE.Group(); this.bypass.add(this.neutralArrows);
+    const bypassArrow = flowArrowGeometry(.61), bypassArrowMaterial = this.overlayMaterial('#eafaff');
+    for (const sign of [-1, 1]) {
+      const arrow = this.mesh(bypassArrow, bypassArrowMaterial, this.neutralArrows, [sign * .023, 0, .004]);
+      arrow.rotation.z = sign < 0 ? Math.PI : 0;
+      arrow.castShadow = false; arrow.receiveShadow = false; arrow.userData.nonPickable = true;
+    }
     this.spoolStem = this.cylinder(.004, .052, m.chrome, this.spool, [.079, 0, 0], 'x');
     this.cylinder(.012, .008, m.dark, this.spool, [.104, 0, 0], 'x');
     this.springs = this.part('centering-springs', [.070, 0, 0], this.valve);
@@ -334,7 +372,12 @@ export class HydraulicScene {
     this.box([.004, height, depth], m.painted, back, [max[0] + .002, cy, cz]);
     this.box([width + .008, height, .004], m.painted, front, [cx, cy, max[2] + .002]);
     this.tankLid = this.box([width + .016, .006, depth + .016], m.cast, front, [cx, max[1] + .003, cz]);
-    this.cylinder(.015, .020, m.dark, front, [cx - .07, max[1] + .016, cz]);
+    this.cylinder(.013, .013, m.dark, front, [cx - .07, max[1] + .013, cz]);
+    this.cylinder(.016, .007, m.zinc, front, [cx - .07, max[1] + .023, cz], 'y', 20);
+    for (const x of [cx - .079, cx + .079]) {
+      this.plate([.026, .004, .023], .001, m.dark, front, [x, max[1] + .008, cz - .069]);
+      this.sleeve(.006, .009, .004, m.zinc, front, [x, max[1] + .015, cz - .069], 0, TAU, 'z');
+    }
     for (const x of [min[0], max[0]]) for (const z of [min[2], max[2]]) this.bolt(front, [x, max[1] + .008, z]);
     this.housing(back, front, [0, .045, .21]);
     // Scale marks remain on a narrow rear post, leaving a broad unobstructed oil window.
@@ -368,13 +411,31 @@ export class HydraulicScene {
       this.pumpGearMeshes.push(this.mesh(pumpGearGeometry(), [m.machined, m.steel], gear));
       this.cylinder(PUMP_DETAIL.shaftRadiusM, .047, m.chrome, gear, [0, 0, -.008], 'z');
     }
+    this.pumpGears.children[1].rotation.z = Math.PI / 12;
     this.pumpClearance = pumpRadialClearanceBound(this.pumpGearMeshes[0].geometry);
-    this.box([.062, .045, .044], m.dark, this.pump, [-.36, .056, -.10]); this.box([.100, .012, .090], m.cast, this.pump, [-.36, .027, -.10]);
+    this.plate([.069, .065, .051], .004, m.dark, this.pump, [-.36, .066, -.10]);
+    this.plate([.105, .010, .106], .002, m.zinc, this.pump, [-.36, .024, -.105]);
+    for (const x of [-.40, -.32]) for (const z of [-.140, -.069]) this.bolt(this.pump, [x, .031, z]);
+    const flangeZ = D.pumpCenter[2] - PUMP_DETAIL.bodyHalfWidthM - PUMP_DETAIL.coverThicknessM;
+    this.cylinder(.014, .008, m.zinc, pumpBack, [-.375, .115, flangeZ - .004], 'z', 24);
     this.drive = this.part('pump-drive', [-.375, .115, -.19]);
-    this.cylinder(.030, .080, m.painted, this.drive, [-.375, .115, -.188], 'z');
-    for (let i = 0; i < 10; i++) this.sleeve(.030, .033, .002, m.cast, this.drive, [-.375, .115, -.154 - i * .007], 0, TAU, 'z');
-    this.cylinder(.008, .028, m.chrome, this.drive, [-.375, .115, -.139], 'z');
-    this.box([.050, .057, .050], m.dark, this.drive, [-.375, .049, -.188]);
+    this.cylinder(.028, .074, m.painted, this.drive, [-.375, .115, -.188], 'z');
+    for (let i = 0; i < 16; i++) {
+      const azimuth = i * TAU / 16, y = .115 + .030 * Math.sin(azimuth), x = -.375 + .030 * Math.cos(azimuth);
+      this.plate([.008, .0018, .063], .0006, m.painted, this.drive, [x, y, -.189]).rotation.z = azimuth;
+    }
+    for (const z of [-.226, -.151]) this.cylinder(.032, .009, m.cast, this.drive, [-.375, .115, z], 'z');
+    this.cylinder(.025, .011, m.painted, this.drive, [-.375, .115, -.234], 'z');
+    this.cylinder(.012, .031, m.dark, this.drive, [-.375, .115, -.131], 'z');
+    for (const z of [-.141, -.120]) this.sleeve(.0118, .0134, .0025, m.zinc, this.drive, [-.375, .115, z], 0, TAU, 'z');
+    this.plate([.038, .016, .035], .002, m.painted, this.drive, [-.375, .153, -.192]);
+    this.plate([.041, .0045, .039], .0015, m.cast, this.drive, [-.375, .163, -.192]);
+    for (const x of [-.390, -.36]) for (const z of [-.205, -.179]) this.bolt(this.drive, [x, .166, z], 'y', .53);
+    for (const x of [-.398, -.352]) {
+      this.plate([.017, .060, .047], .002, m.dark, this.drive, [x, .053, -.185]);
+      this.plate([.026, .007, .057], .0016, m.cast, this.drive, [x, .024, -.185]);
+      this.bolt(this.drive, [x, .029, -.208], 'y', .86);
+    }
     this.filter = this.part('return-filter', D.filterCenter);
     this.splitSleeve(.018, .024, .065, m.cast, this.filter, [.045, .092, .20], [0, 0, .10], 'y');
     this.cylinder(.026, .012, m.steel, this.filter, [.045, .130, .2]);
@@ -405,54 +466,101 @@ export class HydraulicScene {
     for (let i = 0; i < 9; i++) this.sleeve(.0075, .0087, .0008, m.dark, this.adjuster, [p[0], p[1] + .024 + i * .0022, p[2]], 0, TAU, 'y');
     this.cylinder(.013, .006, m.dark, this.adjuster, [p[0], p[1] + .047, p[2]], 'y', 6);
     this.reliefPath = new THREE.Group(); this.relief.add(this.reliefPath);
-    this.reliefMaterial = this.material({ color: '#73d7dc', emissive: '#36828a', emissiveIntensity: .5, roughness: .3 });
-    this.tube([[p[0], .1275, p[2]], [p[0], p[1] + RELIEF_DETAIL.tipY - .002, p[2]], [p[0] + .005, p[1] + reliefConeY(.005) + RELIEF_DETAIL.displayLiftM / 2, p[2]], [p[0] + .0081, p[1] - .0094, p[2]], [p[0] + .0081, .158, p[2]], [p[0] + .016, .158, p[2]]], .00055, this.reliefMaterial, this.reliefPath);
+    this.reliefMaterials = ['P', 'T'].map(() => this.material({ color: '#73d7dc', emissive: '#36828a', emissiveIntensity: .5, roughness: .3 }));
+    const seat = [p[0] + .005, p[1] + reliefConeY(.005) + RELIEF_DETAIL.displayLiftM / 2, p[2]];
+    this.tube([[p[0], .1275, p[2]], [p[0], p[1] + RELIEF_DETAIL.tipY - .002, p[2]], seat], .00055, this.reliefMaterials[0], this.reliefPath);
+    this.tube([seat, [p[0] + .0081, p[1] - .0094, p[2]], [p[0] + .0081, .158, p[2]], [p[0] + .016, .158, p[2]]], .00055, this.reliefMaterials[1], this.reliefPath);
     this.box([.018, .087, .018], m.dark, this.relief, [p[0] - .025, .064, p[2]]);
     this.box([.070, .010, .045], m.cast, this.relief, [p[0], .018, p[2]]);
   }
 
   buildRoutes() {
     const m = this.mat;
+    const arrowShape = flowArrowGeometry(1), arrowFill = this.overlayMaterial('#f7fcff'), arrowEdge = this.overlayMaterial('#13252d');
     for (const id of ['line-suction', 'line-P', 'line-A', 'line-B', 'line-T', 'line-relief']) {
       const route = CIRCUIT_ROUTES.find(item => item.partId === id);
       this.part(id, route.points[Math.floor(route.points.length / 2)]);
     }
     for (const route of CIRCUIT_ROUTES) {
       const parent = this.components.get(route.partId).node;
-      const material = this.material({ color: '#3794aa', metalness: .24, roughness: .42 });
-      const result = this.tube(route.points, route.partId === 'line-suction' ? .006 : .0048, material, parent);
+      const rigid = ['pickup', 'relief-supply'].includes(route.id);
+      const radius = route.partId === 'line-suction' ? .0075 : rigid ? .0039 : .0061;
+      const curve = rigid ? roundedPath(route.points, .009) : hoseCurve(route, PORTS);
+      const length = curve.getLength(), segments = Math.max(36, Math.ceil(length / .005));
+      this.mesh(new THREE.TubeGeometry(curve, segments, radius, 14, false), rigid ? m.zinc : m.hose, parent);
+      const edge = Math.min((rigid ? .008 : .025) / length, .31);
+      const restriction = route.id === 'valve-return' ? .57 : null;
+      const band = (from, to) => {
+        const material = this.overlayMaterial('#67d8e8');
+        const mesh = this.mesh(hosePressureBand(curve, radius + .00027, segments, from, to), material, parent);
+        mesh.castShadow = false; mesh.receiveShadow = false; mesh.userData.nonPickable = true;
+        return { material, mesh };
+      };
+      const cartridgeHalf = .009 / length;
+      const bands = restriction ? [band(edge, restriction - cartridgeHalf), band(restriction + cartridgeHalf, 1 - edge)] : [band(edge, 1 - edge)];
       const arrows = [];
-      for (let index = 0; index < Math.max(2, Math.ceil(result.curve.getLength() / .11)); index++) {
-        const arrow = this.mesh(new THREE.ConeGeometry(.0057, .014, 12), m.arrow, parent); arrow.castShadow = false; arrows.push(arrow);
+      for (let index = 0; index < Math.max(1, Math.ceil(length / .083)); index++) {
+        const arrow = new THREE.Group(); arrow.visible = false; parent.add(arrow);
+        const edge = this.mesh(arrowShape, arrowEdge, arrow), fill = this.mesh(arrowShape, arrowFill, arrow, [0, 0, .00018]);
+        edge.scale.set(1.18, 1.24, 1);
+        for (const mesh of [edge, fill]) { mesh.castShadow = false; mesh.receiveShadow = false; mesh.userData.nonPickable = true; }
+        arrow.userData.baseScale = rigid && length < .08 ? .70 : 1;
+        arrows.push(arrow);
       }
-      this.routes.push({ ...route, ...result, material, arrows, flowM3s: 0, pressurePa: 0 });
+      for (const [id, progress, side] of [[route.from, 0, 1], [route.to, 1, -1]]) {
+        const fitting = new THREE.Group(), point = curve.getPointAt(progress);
+        fitting.position.copy(point);
+        fitting.quaternion.setFromUnitVectors(V([1, 0, 0]), curve.getTangentAt(progress).multiplyScalar(side));
+        this.components.get(PORTS[id].partId).node.attach(fitting);
+        this.buildHoseFitting(fitting, radius, rigid);
+      }
+      if (restriction) {
+        const cartridge = new THREE.Group(); parent.add(cartridge);
+        cartridge.position.copy(curve.getPointAt(restriction));
+        cartridge.quaternion.setFromUnitVectors(V([1, 0, 0]), curve.getTangentAt(restriction));
+        this.cylinder(.009, .016, m.zinc, cartridge, [0, 0, 0], 'x', 6);
+        this.cylinder(.0075, .004, m.dark, cartridge, [0, 0, 0], 'x', 24);
+      }
+      this.routes.push({ ...route, curve, length, radius, bands, arrows, flowM3s: 0, pressurePa: 0 });
     }
-    // Every route ends at the exact shared fitting, including supply and return tee nodes.
-    for (const [key, spec] of Object.entries(PORTS)) {
-      const parent = this.components.get(spec.partId).node;
-      const fitting = new THREE.Group(); fitting.position.set(...spec.position);
-      fitting.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), V(spec.normal));
-      // Valve children already live in the valve coordinate system.
-      if (parent.parent === this.valve) fitting.position.sub(this.valve.position);
-      parent.add(fitting);
-      this.sleeve(.0022, key.includes('cylinder') ? .0055 : .0070, .011, m.brass, fitting, [0, 0, 0]);
-      this.cylinder(key.includes('cylinder') ? .006 : .008, .003, m.steel, fitting, [0, 0, 0], 'x', 6);
-      this.sleeve(.0022, .0042, .013, m.chrome, fitting, [.004, 0, 0]);
+    for (const id of ['supply-tee', 'return-tee']) {
+      const port = PORTS[id];
+      this.plate([.020, .018, .020], .002, m.zinc, this.components.get(port.partId).node, port.position);
     }
+  }
+
+  buildHoseFitting(fitting, radius, rigid) {
+    const m = this.mat;
+    this.cylinder(radius + .004, .007, m.zinc, fitting, [.002, 0, 0], 'x', 6);
+    this.cylinder(radius + .0018, .0075, m.steel, fitting, [.007, 0, 0], 'x', 20);
+    if (rigid) return;
+    this.cylinder(radius + .0021, .0135, m.machined, fitting, [.017, 0, 0], 'x', 24);
+    for (const x of [.0125, .017, .0215]) this.cylinder(radius + .0024, .0016, m.zinc, fitting, [x, 0, 0], 'x', 24);
+    this.cylinder(radius + .0011, .004, m.hose, fitting, [.024, 0, 0], 'x', 20);
   }
 
   buildBench() {
     const m = this.mat;
-    this.box([1.17, .021, .64], m.dark, this.stage, [0, -.0005, .060]);
-    this.box([1.19, .005, .66], m.steel, this.stage, [0, .0125, .060]);
-    for (const x of [-.55, .55]) for (const z of [-.225, .345]) {
-      this.box([.025, .048, .025], m.rubber, this.stage, [x, -.033, z]); this.bolt(this.stage, [x, .017, z]);
+    this.plate([1.17, .029, .64], .006, m.dark, this.stage, [0, -.004, .060]);
+    this.plate([1.19, .008, .66], .003, m.panel, this.stage, [0, .011, .060]);
+    // Replaceable mounting decks sit directly under their respective assemblies.
+    for (const [x, z, width, depth] of [[-.397, .040, .269, .564], [-.109, .124, .247, .191], [.317, 0, .536, .142]]) {
+      this.plate([width, .0045, depth], .002, m.zinc, this.stage, [x, .017, z]);
+      for (const dx of [-1, 1]) for (const dz of [-1, 1]) this.bolt(this.stage, [x + dx * (width / 2 - .012), .020, z + dz * (depth / 2 - .014)], 'y', .75);
     }
-    const floor = this.material({ color: '#172834', metalness: .15, roughness: .9 });
-    const ground = this.mesh(new THREE.PlaneGeometry(12, 12), floor, this.stage, [0, -.060, 0]); ground.rotation.x = -Math.PI / 2; ground.castShadow = false;
-    // Bench markings are sparse and do not compete with the component callouts.
-    const strip = this.material({ color: '#637982', metalness: .4, roughness: .6 });
-    for (let x = -.50; x <= .50; x += .05) this.box([.0006, .0003, .009], strip, this.stage, [x, .0152, .367]);
+    this.plate([.247, .0045, .125], .002, m.zinc, this.stage, [-.171, .017, -.041]);
+    for (const z of [-.256, .375]) {
+      this.plate([1.123, .012, .0045], .0018, m.panel, this.stage, [0, -.004, z]);
+      for (const x of [-.491, -.245, 0, .245, .491]) this.bolt(this.stage, [x, -.004, z + Math.sign(z) * .003], 'z', .62);
+    }
+    for (const x of [-.55, .55]) for (const z of [-.225, .345]) {
+      this.plate([.041, .011, .033], .003, m.rubber, this.stage, [x, -.054, z]);
+      this.cylinder(.012, .027, m.dark, this.stage, [x, -.034, z], 'y', 20);
+      this.cylinder(.014, .006, m.zinc, this.stage, [x, -.021, z], 'y', 6);
+      this.bolt(this.stage, [x, .016, z]);
+    }
+    const floor = this.material({ color: '#101a23', roughness: .96 });
+    const ground = this.mesh(new THREE.PlaneGeometry(30, 30), floor, this.stage, [0, -.060, 0]); ground.rotation.x = -Math.PI / 2; ground.castShadow = false;
   }
 
   buildOverlay() {
@@ -495,29 +603,36 @@ export class HydraulicScene {
     const explode = this.view.mode === 'exploded' ? this.view.explode : 0;
     this.leftSpring.scale.x = 1 + spool.offsetM / .032; this.leftSpring.position.x = .098 * spool.offsetM / .032;
     this.rightSpring.scale.x = 1 - spool.offsetM / .032; this.rightSpring.position.x = .098 * spool.offsetM / .032;
-    const open = snapshot.flowsM3s.reliefToTank > 1e-12; this.poppet.position.y = open ? RELIEF_DETAIL.displayLiftM : 0;
+    const open = Math.abs(snapshot.flowsM3s.reliefToTank) > FLOW_THRESHOLD_M3S;
+    this.poppet.position.y = open ? RELIEF_DETAIL.displayLiftM : 0;
     this.reliefPath.visible = open && this.view.layers.paths && this.view.mode !== 'assembled';
     this.reliefSpring.scale.y = 1 - this.poppet.position.y / (RELIEF_DETAIL.springTopY - RELIEF_DETAIL.springBottomY);
     this.reliefSpring.position.y = (D.reliefCenter[1] + RELIEF_DETAIL.springTopY) * (1 - this.reliefSpring.scale.y);
     this.capFluidMat.color.copy(this.view.pressureColors ? this.pressureColor(snapshot.portsPa.A) : new THREE.Color('#bba158'));
     this.rodFluidMat.color.copy(this.view.pressureColors ? this.pressureColor(snapshot.portsPa.B) : new THREE.Color('#bba158'));
-    for (const [id, material] of Object.entries(this.windowMaterials)) material.color.copy(this.view.pressureColors ? this.pressureColor(snapshot.portsPa[id.startsWith('T') ? 'T' : id]) : new THREE.Color('#4cbed0'));
-    for (const p of this.internalPorts) { p.material.color.copy(this.view.pressureColors ? this.pressureColor(snapshot.portsPa[p.port]) : new THREE.Color('#4cbed0')); }
-    this.bypassMaterial.color.copy(this.pressureColor(snapshot.portsPa.P));
+    const returnPressure = snapshot.returnBackpressurePa ?? snapshot.portsPa.T;
+    const valvePressure = { ...snapshot.portsPa, T: returnPressure };
+    const internalColor = pressure => this.view.pressureColors ? this.pressureColor(pressure) : new THREE.Color('#93aeb3');
+    for (const [id, material] of Object.entries(this.windowMaterials)) material.color.copy(internalColor(valvePressure[id.startsWith('T') ? 'T' : id]));
+    for (const { port, material } of this.internalPorts) material.color.copy(internalColor(valvePressure[port]));
+    for (const [index, port] of ['P', 'T'].entries()) this.reliefMaterials[index].color.copy(internalColor(snapshot.portsPa[port]));
+    const neutralFlow = snapshot.connections.includes('P-T') && Math.abs(snapshot.flowsM3s.supplyToValve) > FLOW_THRESHOLD_M3S;
+    this.bypassMaterial.color.copy(internalColor(snapshot.portsPa.P));
     this.bypass.visible = this.view.layers.paths && this.view.mode !== 'assembled';
-    this.bypassMaterial.emissiveIntensity = command === 'neutral' ? .6 : .05;
+    this.bypassMaterial.emissiveIntensity = neutralFlow ? .6 : .05;
+    this.neutralArrows.visible = this.view.flowArrows && neutralFlow;
     for (const route of this.routes) {
-      const flow = route.flowKeys.reduce((sum, key) => sum + snapshot.flowsM3s[key], 0); route.flowM3s = flow; route.pressurePa = snapshot.portsPa[route.pressurePort];
-      route.material.color.copy(this.view.pressureColors ? this.pressureColor(route.pressurePa) : new THREE.Color(route.partId === 'line-suction' ? '#536d74' : '#355a69'));
-      for (let index = 0; index < route.arrows.length; index++) {
-        const arrow = route.arrows[index]; arrow.visible = this.view.flowArrows && Math.abs(flow) > 1e-12;
-        if (!arrow.visible) continue;
-        const progress = ((index / route.arrows.length + timeS * .16 * Math.sign(flow)) % 1 + 1) % 1;
-        const point = route.curve.getPointAt(clamp(progress, .018, .982)), tangent = route.curve.getTangentAt(clamp(progress, .018, .982)).multiplyScalar(Math.sign(flow));
-        arrow.position.copy(point); arrow.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), tangent);
-      }
+      route.flowM3s = route.flowKeys.reduce((sum, key) => sum + snapshot.flowsM3s[key], 0);
+      route.pressurePa = route.id === 'valve-return' ? returnPressure : snapshot.portsPa[route.pressurePort];
+      route.bands.forEach((band, index) => {
+        band.pressurePa = index === 0 ? route.pressurePa : snapshot.portsPa.T;
+        band.material.color.copy(this.view.pressureColors ? this.pressureColor(band.pressurePa) : new THREE.Color('#6f7e82'));
+      });
+      for (const arrow of route.arrows) arrow.visible = this.view.flowArrows && Math.abs(route.flowM3s) > FLOW_THRESHOLD_M3S;
     }
-    this.pumpGears.children.forEach((gear, index) => { gear.rotation.z = timeS * 1.8 * (index === 0 ? 1 : -1) + (index === 0 ? 0 : Math.PI / 12); });
+    if (Math.abs(snapshot.flowsM3s.pumpFromTank) > FLOW_THRESHOLD_M3S) {
+      this.pumpGears.children.forEach((gear, index) => { gear.rotation.z = timeS * 1.8 * (index === 0 ? 1 : -1) + (index === 0 ? 0 : Math.PI / 12); });
+    }
     this.applyView(explode); this.highlight(this.view.selectedPart);
     for (const item of this.highlighted) { const original = Array.isArray(item.original) ? item.original : [item.original]; item.clones.forEach((material, index) => material.color.copy(original[index].color)); }
     // OrbitControls updates synchronously on input (damping is disabled). Calling
@@ -535,8 +650,41 @@ export class HydraulicScene {
     for (const part of this.sealParts) part.visible = this.view.layers.seals;
     for (const port of this.internalPorts) for (const mesh of port.meshes) mesh.visible = cut && this.view.layers.paths;
     for (const mesh of this.galleryFluids) mesh.visible = cut && this.view.layers.paths;
-    this.note.hidden = this.view.mode !== 'exploded';
-    this.note.textContent = '분해 관찰 · 배관과 유로는 조립 상태의 대표 연결입니다';
+    const notes = [];
+    if (this.view.mode === 'exploded') notes.push('분해 관찰 · 배관은 조립 상태 기준');
+    if (this.view.flowArrows) notes.push('화살표 이동 속도는 표시용');
+    this.note.classList.toggle('is-scale', this.view.flowArrows && this.view.mode !== 'exploded');
+    const text = notes.join(' · ');
+    this.note.hidden = !text;
+    if (this.note.textContent !== text) this.note.textContent = text;
+  }
+
+  orientRouteArrows() {
+    const tangent = new THREE.Vector3(), normal = new THREE.Vector3(), side = new THREE.Vector3(), basis = new THREE.Matrix4();
+    const forward = this.camera.getWorldDirection(new THREE.Vector3());
+    const metreScale = 2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) / (this.height * this.camera.zoom);
+    for (const { arrows, curve, flowM3s, length, radius } of this.routes) {
+      if (!arrows[0].visible) continue;
+      const direction = Math.sign(flowM3s), margin = Math.min(.029 / length, .28);
+      const phase = this.reducedMotion.matches ? 0 : this.timeS * ARROW_SPEED_MPS / (length * (1 - 2 * margin));
+      arrows.forEach((arrow, index) => {
+        const cycle = THREE.MathUtils.euclideanModulo((index + .5) / arrows.length + phase * direction, 1);
+        const progress = THREE.MathUtils.lerp(margin, 1 - margin, cycle);
+        curve.getPointAt(progress, arrow.position);
+        curve.getTangentAt(progress, tangent).multiplyScalar(direction);
+        normal.subVectors(this.camera.position, arrow.position);
+        const depth = -normal.dot(forward);
+        const closeUpScale = 28 * depth * metreScale / .020;
+        arrow.scale.setScalar(clamp(closeUpScale, .05, arrow.userData.baseScale));
+        side.crossVectors(normal, tangent);
+        if (side.lengthSq() < 1e-10) side.crossVectors(this.camera.up, tangent);
+        side.normalize();
+        normal.crossVectors(tangent, side);
+        arrow.position.addScaledVector(normal, radius + .002);
+        arrow.quaternion.setFromRotationMatrix(basis.makeBasis(tangent, side, normal));
+        arrow.userData.progress = progress;
+      });
+    }
   }
 
   highlight(id) {
@@ -654,7 +802,7 @@ export class HydraulicScene {
     const groups = { cylinder: this.barrel, valve: this.valve, relief: this.relief, tank: this.tank };
     const subject = groups[preset] || this.root, bounds = this.visibleBounds(subject), points = this.visiblePoints(subject);
     if (preset === 'cylinder') for (const group of [this.cap, this.gland, this.piston, this.rod]) { bounds.union(this.visibleBounds(group)); points.push(...this.visiblePoints(group)); }
-    this.fitBounds(bounds, preset === 'front' || preset === 'valve' ? [0, .13, 1] : preset === 'top' ? [.01, 1, .25] : [.62, .40, 1], points);
+    this.fitBounds(bounds, preset === 'front' || preset === 'valve' ? [0, .13, 1] : preset === 'top' ? [.01, 1, .25] : [.55, .67, 1], points);
   }
   focusPart(id) {
     const part = this.components.get(id); if (!part) return false;
@@ -714,6 +862,7 @@ export class HydraulicScene {
         const angle = i * TAU / 4, point = mesh.localToWorld(V([.010 * Math.cos(angle), .010 * Math.sin(angle), mesh.geometry.boundingBox.max.z]));
         const direction = point.clone().sub(this.camera.position); ray.set(this.camera.position, direction.clone().normalize()); ray.far = direction.length() + .0001;
         const first = ray.intersectObject(this.root, true).find(hit => {
+          if (hit.object.userData.nonPickable) return false;
           for (let node = hit.object; node; node = node.parent) if (!node.visible) return false;
           const material = Array.isArray(hit.object.material) ? hit.object.material[hit.face.materialIndex] : hit.object.material;
           return !(material.transparent && material.opacity < .5);
@@ -770,7 +919,17 @@ export class HydraulicScene {
       spoolConnections: this.drawnSpool?.connections ?? [], capFluidLengthM: this.capFluid.scale.x, rodFluidLengthM: this.rodFluid.scale.x,
       capFluidVolumeM3: volume(this.capFluid), rodFluidVolumeM3: volume(this.rodFluid), tankVolumeM3: tankSize.width * tankSize.height * tankSize.depth * this.tankFluid.scale.y,
       tankSurfaceY: this.tankFluid.position.y + tankSize.height * this.tankFluid.scale.y / 2, mode: this.view.mode, selectedPart: this.view.selectedPart,
-      routes: this.routes.map(route => ({ id: route.id, flowM3s: route.flowM3s, pressurePa: route.pressurePa, visibleArrowCount: route.arrows.filter(arrow => arrow.visible).length, start: route.curve.getPoint(0).toArray(), end: route.curve.getPoint(1).toArray() })),
+      routes: this.routes.map(route => {
+        const visibleArrows = route.arrows.filter(arrow => arrow.visible);
+        const arrow = visibleArrows[0];
+        return {
+          id: route.id, flowM3s: route.flowM3s, pressurePa: route.pressurePa,
+          pressureBands: route.bands.map(({ pressurePa, material }) => ({ pressurePa, color: '#' + material.color.getHexString() })),
+          visibleArrowCount: visibleArrows.length,
+          arrowDirection: arrow ? V([1, 0, 0]).applyQuaternion(arrow.quaternion).dot(route.curve.getTangentAt(arrow.userData.progress)) : 0,
+          start: route.curve.getPoint(0).toArray(), end: route.curve.getPoint(1).toArray(),
+        };
+      }),
       drawCalls: this.renderer.info.render.calls, triangles: this.renderer.info.render.triangles, renderFrame: this.renderer.info.render.frame,
       camera: this.getCameraState(), render: { calls: this.renderer.info.render.calls, triangles: this.renderer.info.render.triangles },
       labels: [...this.labels].filter(([, label]) => !label.button.hidden).map(([id, label]) => ({ id, top: parseFloat(label.button.style.top), left: parseFloat(label.button.style.left) })),
@@ -782,7 +941,7 @@ export class HydraulicScene {
     const width = Math.max(1, this.container.clientWidth), height = Math.max(1, this.container.clientHeight); this.width = width; this.height = height;
     this.renderer.setSize(width, height, false); this.camera.aspect = width / height; this.camera.updateProjectionMatrix(); this.render();
   }
-  render() { if (this.disposed) return; this.camera.updateMatrixWorld(); this.layoutLabels(); this.renderer.render(this.scene, this.camera); }
+  render() { if (this.disposed) return; this.camera.updateMatrixWorld(); this.orientRouteArrows(); this.layoutLabels(); this.renderer.render(this.scene, this.camera); }
   dispose() {
     if (this.disposed) return; this.disposed = true; this.resizeObserver.disconnect();
     this.controls.removeEventListener('change', this.controlChange); this.controls.dispose();
