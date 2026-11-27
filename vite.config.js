@@ -4,7 +4,7 @@ import { defineConfig, normalizePath } from 'vite';
 
 const generated = ['output', 'release', '.security-stage-*', 'dist'];
 const projectRoot = normalizePath(path.dirname(fileURLToPath(import.meta.url)));
-const projectGlob = projectRoot.replace(/[?*[\]{}()!+@]/g, '\\$&');
+const projectGlob = projectRoot.replace(/[\\?*[\]{}()!+@]/g, '\\$&');
 
 export default defineConfig({
   base: './',
