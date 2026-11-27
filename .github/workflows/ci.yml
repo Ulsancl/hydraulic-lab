@@ -47,10 +47,11 @@ jobs:
       - name: Build web bundle
         run: npm run build
       - name: Verify browser observation and interaction
-        timeout-minutes: 10
+        # Windows software rendering can take over ten minutes for the full suite.
+        timeout-minutes: 15
         run: npm run test:browser
       - name: Verify component facts and force-power observations
-        timeout-minutes: 10
+        timeout-minutes: 15
         run: npm run test:detail
       - name: Verify source desktop app and persistent experiment workflows
         timeout-minutes: 10
