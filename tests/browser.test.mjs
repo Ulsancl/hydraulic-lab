@@ -72,6 +72,7 @@ try {
       assert.equal(response.status, 403);
       assert.doesNotMatch(await response.text(), /non-sensitive test fixture/);
     }
+    assert.equal((await fetch('http://127.0.0.1:5200/node_modules/vite/dist/client/env.mjs')).status, 200);
   });
   const clockOrigin = new Date('2026-10-01T00:00:00Z');
   await page.clock.install({ time: clockOrigin });
