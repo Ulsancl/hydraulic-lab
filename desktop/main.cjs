@@ -4,11 +4,13 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { atomicWriteProject } = require('./atomic-save.cjs');
+const { readRegularFile } = require('./bounded-read.cjs');
+const { documentPolicy } = require('./content-policy.cjs');
 
 const APP_URL = 'app://hydraulic/';
 const APP_NAME = 'Hydraulic Lab';
 const APP_ID = 'com.hydrauliclab.app';
-const MAX_PROJECT_BYTES = 10 * 1024 * 1024;
+const MAX_WINDOW_SETTINGS_BYTES = 4096;
 const mime = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.txt': 'text/plain; charset=utf-8' };
@@ -19,7 +21,9 @@ let codec;
 app.setName(APP_NAME);
 app.setAppUserModelId(APP_ID);
 // Stable profile and origin preserve user data across ordinary app updates.
-const profileOverride = process.env.HYDRAULIC_LAB_DATA_DIR;
+const testBuild = require('../package.json').hydraulicTestBuild === true;
+const sourceTest = !app.isPackaged && process.env.HYDRAULIC_LAB_TEST_BUNDLE === '1';
+const profileOverride = !app.isPackaged || testBuild ? process.env.HYDRAULIC_LAB_DATA_DIR : undefined;
 if (profileOverride && !path.isAbsolute(profileOverride)) throw new Error('HYDRAULIC_LAB_DATA_DIR must be absolute');
 app.setPath('userData', profileOverride || path.join(app.getPath('appData'), APP_NAME));
 fs.mkdirSync(app.getPath('userData'), { recursive: true });
@@ -34,35 +38,26 @@ function trustedURL(value) {
   try { const url = new URL(value); return url.protocol === 'app:' && url.host === 'hydraulic' && !url.username && !url.password; }
   catch { return false; }
 }
+function appBlob(value) {
+  return typeof value === 'string' && value.startsWith('blob:') && trustedURL(value.slice(5));
+}
 function trustedSender(event) {
   if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame || !trustedURL(event.senderFrame?.url)) {
     throw new Error('Invalid application sender');
   }
 }
 function command(value) { mainWindow?.webContents.send('hydraulic:command', value); }
-function safeFileName(value) {
-  let name = path.basename(typeof value === 'string' ? value : '유압 실험.hydraulic.json')
-    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').replace(/[. ]+$/, '').slice(0, 160);
-  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name)) name = `hydraulic-${name}`;
-  return name || '유압 실험.hydraulic.json';
+function safeFileName(value, extension = '.json') {
+  let name = path.win32.basename(typeof value === 'string' ? value : '')
+    .replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '')
+    .replace(/[<>:"/\\|?*\u0000-\u001f\u007f-\u009f]/g, '_');
+  if (name.toLowerCase().endsWith(extension)) name = name.slice(0, -extension.length);
+  name = name.slice(0, 150).replace(/[. ]+$/, '');
+  if (/^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(?:[ .]|$)/i.test(name)) name = `hydraulic-${name}`;
+  return (name || '유압 실험.hydraulic') + extension;
 }
-function jsonText(contents) {
-  if (typeof contents !== 'string' || Buffer.byteLength(contents, 'utf8') > MAX_PROJECT_BYTES) {
-    throw new Error('실험 파일은 10 MiB 이하인 JSON 텍스트여야 합니다.');
-  }
-  try {
-    const parsed = JSON.parse(contents.charCodeAt(0) === 0xfeff ? contents.slice(1) : contents);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
-  } catch { throw new Error('JSON 실험 파일을 읽을 수 없습니다. 원본 파일은 변경하지 않습니다.'); }
-  return contents;
-}
-
-async function validatedText(contents) {
-  jsonText(contents);
-  codec ??= import(pathToFileURL(path.join(__dirname, '..', 'src', 'project.js')).href);
-  const { parseProject } = await codec;
-  parseProject(contents);
-  return contents;
+function projectCodec() {
+  return codec ??= import(pathToFileURL(path.join(__dirname, '..', 'src', 'project.js')).href);
 }
 async function projectTarget(target, allowMissing = false) {
   if (typeof target !== 'string' || !path.isAbsolute(target)) throw new Error('실험 파일의 절대 경로를 확인해 주세요.');
@@ -80,7 +75,8 @@ async function serveBundle(request) {
   if (!trustedURL(request.url)) return new Response('Not found', { status: 404 });
   if (!['GET', 'HEAD'].includes(request.method)) return new Response('Method not allowed', { status: 405 });
   try {
-    const root = path.join(app.getAppPath(), 'dist');
+    const bundle = sourceTest ? 'output/desktop-test-bundle' : 'dist';
+    const root = path.join(app.getAppPath(), bundle);
     const pathname = decodeURIComponent(new URL(request.url).pathname);
     const target = path.resolve(root, '.' + (pathname === '/' ? '/index.html' : pathname));
     const relative = path.relative(root, target);
@@ -95,7 +91,7 @@ async function serveBundle(request) {
     return new Response(request.method === 'HEAD' ? null : data, { headers: {
       'Content-Type': mime[path.extname(actual)] || 'application/octet-stream',
       'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
-      'Content-Security-Policy': "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+      'Content-Security-Policy': documentPolicy + "; frame-ancestors 'none'",
     } });
   } catch { return new Response('Not found', { status: 404 }); }
 }
@@ -112,17 +108,15 @@ function registerFileActions() {
       const result = await dialog.showOpenDialog(mainWindow, { title: '유압 실험 열기',
         properties: ['openFile'], filters: [{ name: '유압 실험 JSON', extensions: ['json'] }] });
       if (result.canceled || !result.filePaths[0]) return { canceled: true };
-      const target = result.filePaths[0], stat = await projectTarget(target);
-      if (!stat.isFile() || stat.size > MAX_PROJECT_BYTES) throw new Error('실험 파일은 10 MiB 이하인 JSON 파일이어야 합니다.');
-      const handle = await fsp.open(target, 'r');
-      let bytes;
+      const target = result.filePaths[0];
+      const { MAX_PROJECT_BYTES, parseProject } = await projectCodec();
       try {
-        const opened = await handle.stat();
-        if (!opened.isFile() || opened.size > MAX_PROJECT_BYTES || opened.dev !== stat.dev || opened.ino !== stat.ino) throw new Error('실험 파일이 변경되었습니다. 다시 선택해 주세요.');
-        bytes = await handle.readFile();
-      } finally { await handle.close(); }
-      if (bytes.byteLength > MAX_PROJECT_BYTES) throw new Error('실험 파일은 10 MiB 이하여야 합니다.');
-      return { canceled: false, content: await validatedText(bytes.toString('utf8')), path: target };
+        const bytes = await readRegularFile(target, MAX_PROJECT_BYTES, await projectTarget(target));
+        return { canceled: false, project: parseProject(bytes.toString('utf8')) };
+      } catch (error) {
+        if (error.code === 'FILE_TOO_LARGE') throw new Error('실험 파일은 10 MiB 이하여야 합니다.');
+        throw error;
+      }
     } finally { nativeBusy--; }
   });
   ipcMain.handle('hydraulic:save-project', async (event, payload) => {
@@ -131,13 +125,15 @@ function registerFileActions() {
     if (!payload || typeof payload !== 'object') throw new Error('실험 파일 내용을 확인해 주세요.');
     nativeBusy++;
     try {
-      const contents = await validatedText(payload.contents);
+      const { parseProject } = await projectCodec();
+      const contents = payload.contents;
+      parseProject(contents);
       const result = await dialog.showSaveDialog(mainWindow, { title: '유압 실험 저장',
         defaultPath: path.join(app.getPath('documents'), safeFileName(payload.name)),
         filters: [{ name: '유압 실험 JSON', extensions: ['json'] }] });
       if (result.canceled || !result.filePath) return { canceled: true };
       await atomicWriteProject(result.filePath, contents, { validateTarget: target => projectTarget(target, true) });
-      return { canceled: false, path: result.filePath };
+      return { canceled: false };
     } finally {
       nativeBusy--;
     }
@@ -206,18 +202,23 @@ function restoreWindowBounds(window, preferred) {
   }
 }
 
-function createWindow() {
+async function createWindow() {
   let saved = {};
-  try { const value = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'window.json'), 'utf8'));
+  try { const value = JSON.parse((await readRegularFile(path.join(app.getPath('userData'), 'window.json'), MAX_WINDOW_SETTINGS_BYTES)).toString('utf8'));
     if (value && typeof value === 'object' && !Array.isArray(value)) saved = value; } catch { /* First launch. */ }
   const preferredBounds = windowBounds(saved);
   mainWindow = new BrowserWindow({ ...preferredBounds, title: APP_NAME, show: false,
     backgroundColor: '#101820', icon: path.join(__dirname, 'assets', 'app.ico'),
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true,
-      sandbox: true, nodeIntegration: false, webSecurity: true },
+      sandbox: true, nodeIntegration: false, webSecurity: true, webviewTag: false },
   });
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  mainWindow.webContents.on('will-navigate', (event, url) => { if (!trustedURL(url)) event.preventDefault(); });
+  const guardNavigation = event => {
+    if (!event.isMainFrame || !trustedURL(event.url)) event.preventDefault();
+  };
+  mainWindow.webContents.on('will-frame-navigate', guardNavigation);
+  mainWindow.webContents.on('will-redirect', guardNavigation);
+  mainWindow.webContents.on('will-attach-webview', event => event.preventDefault());
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     calculationBusy = false; log(`Renderer ended: ${details.reason}`);
     dialog.showMessageBox(mainWindow, { type: 'error', title: APP_NAME, message: '화면을 계속 표시하지 못했습니다.',
@@ -259,17 +260,21 @@ else {
   } });
   app.whenReady().then(async () => {
     protocol.handle('app', serveBundle);
-    session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*'] },
-      (_details, callback) => callback({ cancel: true }));
+    session.defaultSession.webRequest.onBeforeRequest((details, callback) =>
+      callback({ cancel: !trustedURL(details.url) && !appBlob(details.url) }));
     session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
     session.defaultSession.setPermissionCheckHandler(() => false);
     session.defaultSession.on('will-download', (_event, item, contents) => {
-      if (!mainWindow || contents !== mainWindow.webContents) { item.cancel(); return; }
+      const extension = path.win32.extname(item.getFilename()).toLowerCase();
+      if (!mainWindow || contents !== mainWindow.webContents || !appBlob(item.getURL())
+          || !['.json', '.txt'].includes(extension)) { item.cancel(); return; }
       downloads.add(item);
-      item.setSaveDialogOptions({ title: '결과 파일 저장', defaultPath: path.join(app.getPath('documents'), safeFileName(item.getFilename())) });
+      item.setSaveDialogOptions({ title: '결과 파일 저장',
+        defaultPath: path.join(app.getPath('documents'), safeFileName(item.getFilename(), extension)),
+        filters: [{ name: extension === '.json' ? 'JSON' : '텍스트', extensions: [extension.slice(1)] }] });
       item.once('done', () => downloads.delete(item));
     });
-    registerFileActions(); createWindow(); log(`Started ${app.getVersion()}`);
+    registerFileActions(); await createWindow(); log(`Started ${app.getVersion()}`);
   }).catch(error => { log(`Startup failed: ${error.stack}`);
     dialog.showErrorBox(APP_NAME, `프로그램을 시작하지 못했습니다.\n${error.message}`); app.quit(); });
   app.on('window-all-closed', () => app.quit());

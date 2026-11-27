@@ -3,6 +3,14 @@
   "productName": "Hydraulic Lab",
   "copyright": "Hydraulic Lab",
   "asar": true,
+  "electronFuses": {
+    "runAsNode": false,
+    "enableNodeOptionsEnvironmentVariable": false,
+    "enableNodeCliInspectArguments": false,
+    "enableEmbeddedAsarIntegrityValidation": true,
+    "onlyLoadAppFromAsar": true,
+    "grantFileProtocolExtraPrivileges": false
+  },
   "publish": null,
   "electronDist": "node_modules/electron/dist",
   "directories": { "output": "release/windows", "buildResources": "desktop/assets" },

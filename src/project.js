@@ -3,7 +3,8 @@ import { MODEL_VERSION, DIMENSIONS_SI, DEFAULT_SETTINGS, EXPERIMENT_SETTING_DEFA
 export const projectType = 'hydraulic-lab-project';
 export const projectVersion = 1;
 export const projectModelVersion = MODEL_VERSION;
-const MAX_BYTES = 10 * 1024 * 1024;
+export const MAX_PROJECT_BYTES = 10 * 1024 * 1024;
+const MAX_JSON_CONTENT = 64 * 1024;
 const CAMERA_DISTANCE_EPSILON = 1e-10;
 const modes = ['assembled', 'cutaway', 'exploded'];
 const layerKeys = ['housing', 'seals', 'paths'];
@@ -140,9 +141,26 @@ export function createProject(input = {}) {
 }
 export function parseProject(text) {
   if (typeof text !== 'string') fail('실험 파일은 JSON 텍스트여야 합니다.', 'INVALID_JSON');
-  if (text.length > MAX_BYTES || new TextEncoder().encode(text).byteLength > MAX_BYTES) fail('실험 파일은 10 MiB 이하여야 합니다.', 'PROJECT_TOO_LARGE');
+  if (text.length > MAX_PROJECT_BYTES || new TextEncoder().encode(text).byteLength > MAX_PROJECT_BYTES) fail('실험 파일은 10 MiB 이하여야 합니다.', 'PROJECT_TOO_LARGE');
+  const json = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  // Version 1 has a small, fixed shape. Preserve legacy formatting while
+  // limiting the amount of JSON that the parser can turn into objects.
+  let content = 0, depth = 0, quoted = false, escaped = false;
+  for (const character of json) {
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === '"') quoted = false;
+    } else {
+      if (character === ' ' || character === '\t' || character === '\r' || character === '\n') continue;
+      if (character === '"') quoted = true;
+      else if (character === '{' || character === '[') depth++;
+      else if (character === '}' || character === ']') depth--;
+    }
+    if (++content > MAX_JSON_CONTENT || depth > 16) fail('실험 JSON의 구조가 지원 범위를 초과합니다.', 'PROJECT_TOO_COMPLEX');
+  }
   let value;
-  try { value = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text); }
+  try { value = JSON.parse(json); }
   catch { fail('JSON 실험 파일을 읽을 수 없습니다.', 'INVALID_JSON'); }
   return validateProject(value);
 }

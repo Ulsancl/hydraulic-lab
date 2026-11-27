@@ -7,7 +7,7 @@ import { hydraulicDetail } from './detail-model.js';
 import { renderHydraulicDetails } from './detail-panel.js';
 import { createExperiment, setCommand, reconfigureExperiment, instantSnapshot, step as modelStep,
   EXPERIMENT_SETTING_DEFAULTS, RETURN_REFERENCE_FLOW_M3S, MAX_STEP_SECONDS, MAX_SIMULATION_TIME_S } from './model.js';
-import { createProject, parseProject, serializeProject, normalizeView, normalizePlaybackRate, DEFAULT_VIEW } from './project.js';
+import { createProject, parseProject, serializeProject, normalizeView, normalizePlaybackRate, DEFAULT_VIEW, MAX_PROJECT_BYTES } from './project.js';
 import { LESSONS } from './lessons.js';
 import { createGuide, observeGuide, GUIDE_STEP_COUNTS } from './guide.js';
 import { HydraulicScene } from './scene.js';
@@ -15,7 +15,6 @@ import { HydraulicScene } from './scene.js';
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const STORAGE_KEY = 'hydraulic-lab-project-v1';
-const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const RETURN_RESISTANCE_PER_BAR = 1e5 / RETURN_REFERENCE_FLOW_M3S;
 const desktop = window.hydraulicDesktop;
 const browserLocks = desktop ? null : getBrowserLocks();
@@ -25,7 +24,7 @@ const partSelectors = $$('#part-select, #focus-part-select, #mobile-part-select'
 const commands = { extend: '전진', neutral: '중립', retract: '후진' };
 const statuses = { neutral: '중립 순환', moving: '이동 중', 'pressure-limit': '압력 한계로 정지', 'end-stop': '행정 끝 도달' };
 let state = createExperiment(), snapshot = instantSnapshot(state), view = normalizeView(DEFAULT_VIEW), playbackRate = 1;
-let scene, running = false, busy = false, restoring = false, focused = false, lessonId = null, externalClock = false;
+let scene, running = false, busy = false, restoring = false, focused = false, lessonId = null;
 let guide = null, guideRenderKey = null;
 let initialCamera = null, previousExperiment = null, recoveredRaw = null, storageBlocked = false;
 let lastPrimary = null, browserAutosave = null, unreadableStorage = false;
@@ -131,14 +130,14 @@ function syncPlayback() {
 }
 function stop() {
   const wasRunning = running;
-  running = false; externalClock = false; syncPlayback();
+  running = false; syncPlayback();
   if (wasRunning) refresh(true, 0);
   scheduleSave();
 }
 function begin() {
   if (busy) return;
   if (state.timeS >= MAX_SIMULATION_TIME_S) { toast('이 실험의 시간 범위에 도달했습니다. 새 조건 또는 새 실험으로 시작하세요.'); return; }
-  running = true; externalClock = false; lastFrame = performance.now(); syncPlayback();
+  running = true; lastFrame = performance.now(); syncPlayback();
 }
 function toggle() { if (running) stop(); else begin(); }
 function setBusy(value) {
@@ -463,7 +462,7 @@ async function openFile() {
   try {
     const result = await desktop.openProject();
     if (result.canceled) { toast('열기를 취소했습니다. 현재 실험은 그대로 유지합니다.'); return; }
-    readProject(parseProject(result.content)); toast('저장한 실험을 일시정지 상태로 복원했습니다.');
+    readProject(result.project); toast('저장한 실험을 일시정지 상태로 복원했습니다.');
   } catch (error) { toast(`파일을 열지 못했습니다. ${error.message}`); }
   finally { setBusy(false); }
 }
@@ -471,8 +470,9 @@ async function readBrowserFile(event) {
   const file = event.target.files?.[0]; if (!file) return;
   stop(); setBusy(true);
   try {
-    if (file.size > MAX_FILE_BYTES) throw new Error('실험 파일은 10 MiB 이하여야 합니다. 원본을 변경하지 않습니다.');
-    const validated = parseProject(await file.text());
+    const bounded = file.slice(0, MAX_PROJECT_BYTES + 1);
+    if (bounded.size > MAX_PROJECT_BYTES) throw new Error('실험 파일은 10 MiB 이하여야 합니다. 원본을 변경하지 않습니다.');
+    const validated = parseProject(await bounded.text());
     readProject(validated); toast('저장한 실험을 일시정지 상태로 복원했습니다.');
   } catch (error) { toast(`파일을 열지 못했습니다. ${error.message}`); }
   finally { event.target.value = ''; setBusy(false); }
@@ -577,24 +577,21 @@ try {
   if (desktop) window.addEventListener('beforeunload', saveLocal);
   else window.addEventListener('pagehide', flushBrowserOnHide);
 
-  window.hydraulicLab = {
-    getState: () => structuredClone({ state, snapshot: instantSnapshot(state), view, playbackRate, running, detail: hydraulicDetail(state), focused }),
-    project: () => structuredClone(capture()),
-    loadProject: contents => { const validated = parseProject(contents); readProject(validated); return structuredClone(capture()); },
-    step: seconds => manualStep(seconds),
-    camera: () => structuredClone(scene.getCameraState()),
-    components: () => structuredClone(scene.getComponents()),
-    sceneDebug: () => structuredClone(scene.getDebug()),
-    guide: () => structuredClone(guide),
-  };
-  window.advanceTime = milliseconds => {
-    if (!Number.isFinite(milliseconds) || milliseconds < 0 || milliseconds > 60000) throw new RangeError('관찰 진행은 0–60000 ms 범위여야 합니다.');
-    externalClock = true;
-    const duration = running ? milliseconds / 1000 * playbackRate : 0;
-    if (duration > 0) advance(duration);
-    refresh(true, duration);
-  };
-  window.render_game_to_text = () => JSON.stringify({ coordinateSystem: 'SI m/s/Pa/m³/N/W/J; +X cylinder extension; gauge pressure relative to tank; quasi-static model', ...window.hydraulicLab.getState() });
+  if (import.meta.env.MODE === 'test') {
+    window.hydraulicLab = {
+      getState: () => structuredClone({ state, snapshot: instantSnapshot(state), view, playbackRate, running, detail: hydraulicDetail(state), focused }),
+      project: () => structuredClone(capture()),
+      loadProject: contents => { const validated = parseProject(contents); readProject(validated); return structuredClone(capture()); },
+      step: seconds => {
+        if (!Number.isFinite(seconds) || seconds < 0 || seconds > 120) throw new RangeError('Test step must be between 0 and 120 seconds');
+        return manualStep(seconds);
+      },
+      camera: () => structuredClone(scene.getCameraState()),
+      components: () => structuredClone(scene.getComponents()),
+      sceneDebug: () => structuredClone(scene.getDebug()),
+      guide: () => structuredClone(guide),
+    };
+  }
   if (desktop) saveLocal();
   else {
     browserAutosave = createAutosaveUI({
@@ -608,7 +605,7 @@ try {
   function frame(now) {
     const elapsed = Math.max(0, (now - lastFrame) / 1000); lastFrame = now;
     let advanced = 0;
-    if (running && !externalClock && !document.hidden) {
+    if (running && !document.hidden) {
       try { advanced = elapsed * playbackRate; advance(advanced); }
       catch (error) { advanced = 0; stop(); toast(error.message); }
       if (now - lastAutosave > 1500) { lastAutosave = now; saveLocal(); }

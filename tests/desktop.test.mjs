@@ -20,7 +20,7 @@ await fs.mkdir(output, { recursive: true });
 const profile = await fs.mkdtemp(path.join(output, 'profile-'));
 const evidence = path.join(profile, 'test-artifacts');
 await fs.mkdir(evidence);
-const env = { ...process.env, HYDRAULIC_LAB_DATA_DIR: profile };
+const env = { ...process.env, HYDRAULIC_LAB_DATA_DIR: profile, HYDRAULIC_LAB_TEST_BUNDLE: '1' };
 delete env.ELECTRON_RUN_AS_NODE;
 const projectPath = path.join(evidence, '유압 관찰.hydraulic.json');
 const checks = [], errors = [], remoteRequests = [], processes = [];
@@ -104,6 +104,7 @@ async function stableBounds(label) {
 }
 
 try {
+  await fs.writeFile(path.join(profile, 'window.json'), JSON.stringify({ maximized: true }) + ' '.repeat(4096));
   await launch();
   await check('isolated Hydraulic Lab identity, offline bundle, sandbox and native bridge', async () => {
     assert.equal(page.url(), 'app://hydraulic/');
@@ -126,6 +127,7 @@ try {
     }));
     assert.equal(access.local, true); assert.equal(access.remote, false);
     assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length), 1);
+    assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMaximized()), false);
     // Ignore the intentionally denied fetch's CSP message, not application errors.
     assert.ok(errors.every(message => /Content Security Policy|Refused to connect|fetch/i.test(message)), errors.join('\n'));
     errors.length = 0; remoteRequests.length = 0;

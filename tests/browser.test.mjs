@@ -21,7 +21,7 @@ async function until(action, message) {
 const root = path.resolve(import.meta.dirname, '..');
 const output = artifactDirectory(root, path.join(root, 'output/browser-integration'));
 await fs.mkdir(output, { recursive: true });
-const server = await createServer({ root, server: { host: '127.0.0.1', port: 5200, strictPort: true } });
+const server = await createServer({ root, mode: 'test', server: { host: '127.0.0.1', port: 5200, strictPort: true } });
 await server.listen();
 const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext({ viewport: { width: 1600, height: 1100 }, deviceScaleFactor: 1, acceptDownloads: true });
@@ -62,6 +62,18 @@ async function drawnCircuitMatches(current) {
 }
 
 try {
+  await check('development server blocks direct and absolute requests for generated test artifacts', async () => {
+    const marker = path.join(output, 'development-access-check.txt');
+    await fs.writeFile(marker, 'non-sensitive test fixture');
+    const relative = path.relative(root, marker).replaceAll('\\', '/');
+    const absolute = marker.replaceAll('\\', '/');
+    for (const request of [`/${relative}`, `/@fs/${absolute}`]) {
+      const response = await fetch('http://127.0.0.1:5200' + request);
+      assert.equal(response.status, 403);
+      assert.doesNotMatch(await response.text(), /non-sensitive test fixture/);
+    }
+    assert.equal((await fetch('http://127.0.0.1:5200/node_modules/vite/dist/client/env.mjs')).status, 200);
+  });
   const clockOrigin = new Date('2026-10-01T00:00:00Z');
   await page.clock.install({ time: clockOrigin });
   await page.clock.pauseAt(new Date(clockOrigin.getTime() + 60_000));

@@ -8,7 +8,7 @@ import { createServer } from 'vite';
 const root = path.resolve(import.meta.dirname, '..');
 const output = artifactDirectory(root, path.join(root, 'output/guide-browser'));
 await fs.mkdir(output, { recursive: true });
-const server = await createServer({ root, server: { host: '127.0.0.1', port: 5201, strictPort: true, hmr: false } });
+const server = await createServer({ root, mode: 'test', server: { host: '127.0.0.1', port: 5201, strictPort: true, hmr: false } });
 await server.listen();
 const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext({ viewport: { width: 1600, height: 1100 }, acceptDownloads: true });
