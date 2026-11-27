@@ -11,4 +11,7 @@
 .hydraulic-part-label.is-selected { color: #e9ffff; border-color: #76cad2; background: #21525beF; font-weight: 700; }
 .hydraulic-part-label[hidden], .hydraulic-scene-note[hidden] { display: none; }
 .hydraulic-scene-note { position: absolute; bottom: 48px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 28px); box-sizing: border-box; padding: 7px 10px; border: 1px solid #d2ad6350; border-radius: 6px; background: #23323ceF; color: #e3c994; font: 11px/1.5 system-ui, sans-serif; text-align: center; white-space: normal; }
+.hydraulic-scene-note.is-scale { inset: auto 18px 13px auto; transform: none; padding: 6px 8px; border: 0; background: #0b1621d9; color: #c3d0db; font-size: 10px; }
 @media (max-width: 600px) { .hydraulic-part-label { font-size: 10px; padding-inline: 5px; } .hydraulic-scene-note { width: max-content; max-width: calc(100% - 20px); font-size: 10px; bottom: 46px; } }
+@media (max-width: 500px) { .hydraulic-scene-note.is-scale { right: 10px; bottom: 10px; font-size: 9px; } }
+@media (max-width: 360px) { .hydraulic-scene-note.is-scale { bottom: 39px; } }

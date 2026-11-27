@@ -3,7 +3,7 @@ import { hydraulicDetail } from './detail-model.js';
 export { hydraulicDetail } from './detail-model.js';
 
 const toLpm = value => value * 60000;
-const holdNote = '중립에서는 P→T가 순환하고 A·B 유량은 0입니다. 마지막 액실 압력과 그 압력의 힘은 이상적으로 유지됩니다. 압축성 저장 에너지·누설·압력 완화는 계산하지 않습니다.';
+const holdNote = '중립에서는 P와 T가 연결되고 A·B 유량은 0입니다. 마지막 액실 압력과 그 압력의 힘은 이상적으로 유지됩니다. 압축성 저장 에너지·누설·압력 완화는 계산하지 않습니다.';
 const motionNote = '전진이 양수입니다. 힘 한계는 설정 압력에서 가능한 크기이며 현재 압력의 실제 힘과 다릅니다. 도달 예상은 현재 명령·조건을 계속 적용할 때의 모형 시간입니다.';
 
 export function describeHydraulicDetail(partId, state, snapshot) {
@@ -70,20 +70,20 @@ export function describeHydraulicDetail(partId, state, snapshot) {
     flow('방향밸브로 공급', q.supplyToValve);
     flow('릴리프로 우회', q.reliefToTank);
     add('누적 펌프 유압 일', d.energy.pumpJ / 1000, 'kJ', 2);
-    note = '고정 유량을 지정하고 출구 압력은 부하·연결로 결정합니다. 표시 동력은 pP×Q이며 축 토크·실제 구동 전력·펌프 효율은 계산하지 않습니다. 중립·무부하의 이상 유압 동력 0을 실제 소비 전력 0으로 해석하지 않습니다.';
+    note = '펌프 토출은 기준 유량 × 속도 명령 비율입니다. 출구 압력은 부하와 회로 상태로 결정되며 pP×Q가 펌프 유압 동력입니다.';
   } else if (['return-filter', 'line-T'].includes(partId)) {
     flow('방향밸브에서 복귀', q.valveToTank);
     flow('릴리프에서 복귀', q.reliefToTank);
     flow('필터·탱크 합류 유량', d.circuit.returnCombinedM3s);
     pressure('복귀 기준 압력', p.T);
     flow('탱크 순유입 · 증가 +', d.tank.rateM3s);
-    note = '공통 복귀선·필터에는 방향밸브와 릴리프 유량의 합이 흐릅니다. T 포트 유량만으로 계산하지 않습니다. 탱크 기준 게이지압 0을 사용하며 필터 막힘·압력 강하·발열은 계산하지 않습니다.';
+    note = '공통 복귀선·필터에는 방향밸브와 릴리프 유량의 합이 흐릅니다. 표시 압력은 합류 후 탱크 기준 게이지압입니다. 방향밸브 T 포트의 배압은 복귀 제한 앞에서 확인할 수 있습니다.';
   } else if (['suction-strainer', 'line-suction'].includes(partId)) {
     flow('탱크에서 펌프로', q.pumpFromTank);
     add('탱크 현재 체적', d.tank.volumeM3 * 1000, 'L', 3);
     pressure('탱크 기준 게이지압', p.T);
     add('흡입 손실·캐비테이션', '계산하지 않음');
-    note = '흡입 유량은 지정 펌프 유량과 같습니다. 게이지압 0은 이 이상 회로의 기준이며 실제 흡입관 압력·기포·흡입 여유를 예측하는 값이 아닙니다.';
+    note = '흡입 유량은 현재 펌프 토출 유량과 같습니다. 게이지압 0은 이 이상 회로의 탱크 기준입니다.';
   } else if (['directional-body', 'directional-spool', 'centering-springs'].includes(partId)) {
     add('현재 연결', d.circuit.connections.map(value => value.replace('-', '↔')).join(' · '));
     pressure('P 포트 압력', p.P);
@@ -100,11 +100,15 @@ export function describeHydraulicDetail(partId, state, snapshot) {
     add('방향밸브 공급 유압 동력', p.P * q.supplyToValve, 'W');
     note = 'P 배관에는 릴리프 분기가 있습니다. 펌프 출구의 전체 유량과 방향밸브 P 포트로 실제 들어가는 유량을 구분합니다. 압력 제한·행정 끝에서는 P 포트 유입은 0이어도 분기 전 펌프 유량은 유지됩니다.';
   } else if (partId === 'port-T') {
-    pressure('T 포트 게이지압', p.T);
+    pressure('T 포트 게이지압', d.circuit.returnBackpressurePa);
     flow('방향밸브 T 복귀 유량', q.valveToTank);
     flow('외부에서 합류하는 릴리프', q.reliefToTank);
     flow('합류 후 필터 유량', d.circuit.returnCombinedM3s);
-    note = '방향밸브 T 포트를 나온 뒤 릴리프 복귀가 합류합니다. T 포트 자체와 합류 후 복귀관의 유량은 서로 다를 수 있습니다. 반환측의 압력 손실은 무시합니다.';
+    if (state.settings.returnRestrictionPaPerM3s > 0) {
+      add('복귀 저항 손실', w.returnLossW, 'W');
+      add('누적 복귀 저항 손실', d.energy.returnLossJ, 'J', 2);
+    }
+    note = 'T 포트 게이지압은 복귀 제한 앞의 배압입니다. 제한을 지난 방향밸브 유량은 릴리프 유량과 합류해 탱크로 돌아갑니다.';
   } else if (['relief-adjuster', 'relief-spring'].includes(partId)) {
     pressure('설정 압력 한계', state.settings.reliefPressurePa);
     pressure('현재 공급 압력', p.P);
@@ -120,7 +124,7 @@ export function describeHydraulicDetail(partId, state, snapshot) {
     add('릴리프 소산 동력', w.reliefW, 'W');
     add('누적 릴리프 소산', d.energy.reliefJ / 1000, 'kJ', 2);
     add('이상 우회 상태', q.reliefToTank > 0 ? '열림' : '닫힘');
-    note = '압력 한계·행정 끝 정지에서 펌프 전량이 우회합니다. 소산은 (pP−pT)×유량이며 오일 온도로 환산하지 않습니다. 포핏 이동·스프링 압축은 대표 작동 표현입니다.';
+    note = '릴리프 유량이 있으면 열림입니다. 작동 중에도 공급 유량의 일부가 우회할 수 있습니다. 릴리프 소산은 입구와 탱크 간 압력차 × 우회 유량입니다. 포핏 이동·스프링 압축은 대표 작동 표현입니다.';
   } else if (partId === 'piston-seal') {
     pressure('A 액실 압력', p.A); pressure('B 액실 압력', p.B);
     pressure('A−B 압력 차', p.A - p.B);

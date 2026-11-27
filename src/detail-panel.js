@@ -1,10 +1,35 @@
 import { hydraulicDetail } from './detail-model.js';
 import { describeHydraulicDetail } from './detail-readouts.js';
+import { renderCircuitResponse } from './circuit-response.js';
 
 const format = (value, digits = 2) => Number.isFinite(value)
   ? (Math.abs(value) < .5 * 10 ** -digits ? 0 : value).toLocaleString('ko-KR', { minimumFractionDigits: digits, maximumFractionDigits: digits })
   : typeof value === 'string' ? value : '—';
 const setText = (id, value) => { const element = document.getElementById(id); if (element.textContent !== value) element.textContent = value; };
+let returnLossReadout;
+
+function mountReturnLossReadout() {
+  const bar = document.createElement('i');
+  document.getElementById('power-share-relief').after(bar);
+  bar.id = 'power-share-return-loss';
+  const row = document.createElement('dl');
+  row.className = 'return-loss-observation';
+  row.innerHTML = '<dt>복귀 저항 손실</dt><dd id="power-value-return-loss"></dd>';
+  document.querySelector('.power-destinations').after(row);
+  return { row, bar };
+}
+
+function renderReturnLoss(state, power) {
+  const enabled = state.settings.returnRestrictionPaPerM3s > 0 || power.returnLossW > 0;
+  if (!enabled && !returnLossReadout) return;
+  returnLossReadout ??= mountReturnLossReadout();
+  const { row, bar } = returnLossReadout;
+  row.hidden = !enabled;
+  const share = power.pumpW > 0 ? power.returnLossW / power.pumpW : 0;
+  bar.style.width = `${Math.max(0, Math.min(100, share * 100))}%`;
+  bar.dataset.share = String(share);
+  setText('power-value-return-loss', `${format(power.returnLossW, 1)} W`);
+}
 
 function facts(list, values) {
   const signature = values.map(fact => fact.label).join('|');
@@ -25,11 +50,12 @@ function facts(list, values) {
 
 export function renderHydraulicDetails(state, snapshot, view) {
   const d = hydraulicDetail(state, snapshot), description = describeHydraulicDetail(view.selectedPart, state, snapshot);
+  renderCircuitResponse(state, snapshot, d);
   for (const prefix of ['part', 'focus']) {
     facts(document.getElementById(`${prefix}-detail-facts`), description.facts);
     setText(`${prefix}-detail-note`, description.note);
   }
-  const reference = `적용 조건 · ${format(state.settings.pumpFlowM3s * 60000)} L/min · ${format(state.settings.reliefPressurePa / 1e5, 1)} bar 상한`;
+  const reference = `적용 조건 · 펌프 토출 ${format(d.circuit.flowsM3s.pumpFromTank * 60000)} L/min · ${format(state.settings.reliefPressurePa / 1e5, 1)} bar 상한`;
   setText('detail-reference', reference); setText('focus-detail-reference', reference);
   document.getElementById('focus-part-select').value = view.selectedPart;
 
@@ -49,16 +75,19 @@ export function renderHydraulicDetails(state, snapshot, view) {
 
   for (const key of ['pump', 'load', 'relief']) {
     const value = d.power[`${key}W`], output = document.getElementById(`power-value-${key}`);
-    output.dataset.value = String(value); output.textContent = `${format(value, 1)} W`;
+    output.dataset.value = String(value); setText(`power-value-${key}`, `${format(value, 1)} W`);
     if (key !== 'pump') {
       const share = d.power.pumpW > 0 ? value / d.power.pumpW : 0;
       const bar = document.getElementById(`power-share-${key}`);
       bar.style.width = `${Math.max(0, Math.min(100, share * 100))}%`; bar.dataset.share = String(share);
     }
   }
+  renderReturnLoss(state, d.power);
   setText('power-note', d.power.pumpW === 0
-    ? '현재 이상 모형의 유압 동력은 0 W입니다. 유량이 0이라는 뜻은 아니며, 펌프 기계 손실을 포함한 효율도 아닙니다.'
-    : snapshot.status === 'moving'
+    ? '현재 유압 동력은 0 W입니다. 유량은 위 계측값에서 확인할 수 있습니다.'
+    : state.settings.returnRestrictionPaPerM3s > 0
+      ? '펌프의 유압 동력은 부하 전달, 릴리프 소산, 복귀 저항 손실로 나뉩니다.'
+      : snapshot.status === 'moving'
       ? '펌프의 유압 동력이 부하의 일로 전달됩니다. 이 모형은 마찰·배관·펌프 기계 손실을 계산하지 않습니다.'
       : '피스톤이 정지하므로 부하 동력은 0 W이고, 펌프의 유압 동력은 릴리프에서 소산됩니다.');
   setText('fluid-inventory', `세 공간의 오일 합계 ${format(d.balance.fluidVolumeM3 * 1000, 3)} L`);

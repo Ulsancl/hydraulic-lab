@@ -1,4 +1,4 @@
-import { MODEL_VERSION, DIMENSIONS_SI, normalizeSettings, createExperiment, assertValidState } from './model.js';
+import { MODEL_VERSION, DIMENSIONS_SI, DEFAULT_SETTINGS, EXPERIMENT_SETTING_DEFAULTS, normalizeSettings, createExperiment, assertValidState } from './model.js';
 
 export const projectType = 'hydraulic-lab-project';
 export const projectVersion = 1;
@@ -86,8 +86,8 @@ function savedCamera(value) {
 }
 function savedState(value) {
   shape(value, stateKeys, '유압 실험 상태'); modelVersion(value.modelVersion);
-  shape(value.settings, ['pumpFlowM3s', 'reliefPressurePa', 'resistingForceN'], '유압 설정');
-  shape(value.energyJ, ['pump', 'load', 'relief'], '누적 에너지');
+  shape(value.settings, Object.keys(DEFAULT_SETTINGS), '유압 설정', Object.keys(EXPERIMENT_SETTING_DEFAULTS));
+  shape(value.energyJ, ['pump', 'load', 'relief'], '누적 에너지', ['returnLoss']);
   shape(value.cumulativeVolumeM3, ['pump', 'relief'], '누적 유량');
   // One model-owned validator checks SI bounds and physical consistency. It
   // never advances time or repairs a loaded state; accepted numbers stay exact.
@@ -98,10 +98,11 @@ function savedState(value) {
   }
   return {
     modelVersion: value.modelVersion,
-    settings: { pumpFlowM3s: value.settings.pumpFlowM3s, reliefPressurePa: value.settings.reliefPressurePa, resistingForceN: value.settings.resistingForceN },
+    settings: normalizeSettings(value.settings),
     command: value.command, positionM: value.positionM, timeS: value.timeS,
     pressureAPa: value.pressureAPa, pressureBPa: value.pressureBPa,
-    energyJ: { pump: value.energyJ.pump, load: value.energyJ.load, relief: value.energyJ.relief },
+    energyJ: { pump: value.energyJ.pump, load: value.energyJ.load, relief: value.energyJ.relief,
+      ...(Object.hasOwn(value.energyJ, 'returnLoss') ? { returnLoss: value.energyJ.returnLoss } : {}) },
     cumulativeVolumeM3: { pump: value.cumulativeVolumeM3.pump, relief: value.cumulativeVolumeM3.relief },
   };
 }

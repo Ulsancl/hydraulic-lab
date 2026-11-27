@@ -14,3 +14,111 @@
 @media(max-width:1150px){.balance-grid{grid-template-columns:1fr;gap:20px}.balance-observation{padding:0 18px 20px}.focus-detail-panel{margin:0 18px 14px}}
 @media(max-width:820px) and (min-width:501px){.balance-grid{grid-template-columns:1fr 1fr}}
 @media(max-width:500px){.focus-detail-panel{margin:0 13px 13px;padding:12px}.focus-detail-heading{align-items:stretch;flex-direction:column;gap:9px}.focus-detail-panel .detail-facts{grid-template-columns:repeat(2,minmax(0,1fr))}.detail-fact dd{font-size:12px}.balance-observation{padding:0 16px 18px}.detail-facts{gap:13px}.balance-grid{gap:20px}}
+
+.circuit-response {
+  --response-pressure: #e9bb79;
+  --response-flow: #71d0dc;
+  padding: 16px 22px 20px;
+  border-top: 1px solid var(--line);
+  background: #101e2d;
+}
+.circuit-response h3 {
+  margin: 0;
+  color: #e1edf4;
+  font-size: 15px;
+}
+.response-scale {
+  margin: 5px 0 14px;
+  color: #a4bbcf;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.response-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  text-align: left;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.response-table tr > :first-child { width: 31%; }
+.response-table tr > :nth-child(2) { width: 26%; }
+.response-table th, .response-table td { padding: 7px 8px 7px 0; }
+.response-table tr > :last-child { padding-right: 0; }
+.response-table thead th { color: #a4bbcf; font-size: 11px; font-weight: 500; }
+.response-table tbody tr { border-top: 1px solid #2a4053; }
+.response-table tbody th { color: #c3d6e4; font-weight: 500; }
+.response-table tbody th b { margin-right: 4px; color: #e9f3f9; }
+.response-value {
+  color: #e6f1f7;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+.response-value [data-channel] { color: #aac2d2; font-size: 11px; font-weight: 400; }
+.response-table [data-channel-state="isolated"] [data-channel] { color: #cfbce9; }
+.response-track {
+  display: block;
+  height: 4px;
+  margin-top: 5px;
+  border-radius: 3px;
+  background: #293e50;
+  overflow: hidden;
+}
+.response-track i { display: block; height: 100%; border-radius: inherit; }
+.response-pressure i { background: var(--response-pressure); }
+.response-flow i { background: var(--response-flow); }
+.response-branches {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 12px 0 16px;
+}
+.response-branches > div {
+  padding: 8px;
+  border: 1px solid #334a5e;
+  border-radius: 7px;
+  background: #162638;
+}
+.response-branches dt, .response-branches small { color: #b6ccda; font-size: 10px; }
+.response-branches dd { margin: 4px 0 0; color: #e6f1f7; font-size: 13px; font-variant-numeric: tabular-nums; }
+.response-branches .response-relief-state { color: #bacddc; font-size: 10px; line-height: 1.5; }
+.response-branches [data-open="true"] { border-color: #a67a45; background: #362b24; }
+.response-branches [data-open="true"] .response-relief-state strong { color: #ffd08a; }
+.response-branches [data-open="true"] .response-flow i { background: var(--response-pressure); }
+.response-comparison caption {
+  padding: 0 0 7px;
+  border-bottom: 1px solid #344c60;
+  text-align: left;
+  color: #e1edf4;
+  font-size: 13px;
+  font-weight: 650;
+}
+.response-comparison caption span { display: block; margin-top: 3px; color: #aec1d3; font-size: 10px; font-weight: 400; }
+.response-comparison tr > :nth-child(2) { width: 34.5%; }
+.response-comparison small { margin-left: 3px; color: #91dfe8; font-size: 10px; }
+.response-comparison th[aria-current] { color: #d9f4f7; font-weight: 650; }
+.response-comparison td { color: #e0edf6; font-variant-numeric: tabular-nums; }
+.response-comparison [data-comparison="status"] td { color: #afc9da; }
+.power-split #power-share-return-loss { background: #c7a8e3; }
+.return-loss-observation {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 16px;
+  justify-content: space-between;
+  margin: 8px 0 0;
+  padding: 8px 9px;
+  border: 1px solid #48536e;
+  border-radius: 6px;
+  font-size: 10px;
+  line-height: 1.5;
+}
+.return-loss-observation dt { color: #abc2d2; }
+.return-loss-observation dd { margin: 0; color: #e4cef4; font-size: 12px; font-variant-numeric: tabular-nums; }
+
+@media(max-width:500px) {
+  .circuit-response { padding: 14px 13px 16px; }
+  .response-table tbody th b { margin-right: 2px; }
+  .response-branches { gap: 6px; }
+  .response-branches > div { padding: 7px; }
+}

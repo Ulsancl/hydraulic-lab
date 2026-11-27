@@ -1,10 +1,12 @@
 import './style.css';
 import './detail.css';
+import './experiment-controls.css';
 import { supportsAutosaveLock, withAutosaveLock, writeIfUnchanged } from './browser-autosave.js';
 import { createAutosaveUI, getBrowserLocks, readBrowserDraft } from './autosave-ui.js';
 import { hydraulicDetail } from './detail-model.js';
 import { renderHydraulicDetails } from './detail-panel.js';
-import { createExperiment, setCommand, reconfigureExperiment, instantSnapshot, step as modelStep, MAX_STEP_SECONDS, MAX_SIMULATION_TIME_S } from './model.js';
+import { createExperiment, setCommand, reconfigureExperiment, instantSnapshot, step as modelStep,
+  EXPERIMENT_SETTING_DEFAULTS, RETURN_REFERENCE_FLOW_M3S, MAX_STEP_SECONDS, MAX_SIMULATION_TIME_S } from './model.js';
 import { createProject, parseProject, serializeProject, normalizeView, normalizePlaybackRate, DEFAULT_VIEW } from './project.js';
 import { LESSONS } from './lessons.js';
 import { createGuide, observeGuide, GUIDE_STEP_COUNTS } from './guide.js';
@@ -14,6 +16,7 @@ const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const STORAGE_KEY = 'hydraulic-lab-project-v1';
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
+const RETURN_RESISTANCE_PER_BAR = 1e5 / RETURN_REFERENCE_FLOW_M3S;
 const desktop = window.hydraulicDesktop;
 const browserLocks = desktop ? null : getBrowserLocks();
 const commands = { extend: '전진', neutral: '중립', retract: '후진' };
@@ -140,10 +143,17 @@ function setBusy(value) {
   if (desktop?.setBusy) Promise.resolve(desktop.setBusy(value)).catch(() => {});
 }
 function syncSettings() {
-  $('#pump-flow').value = state.settings.pumpFlowM3s * 60000;
-  $('#relief-pressure').value = state.settings.reliefPressurePa / 100000;
-  $('#resisting-force').value = state.settings.resistingForceN / 1000;
-  text('#applied-settings', `적용 중: ${number(state.settings.pumpFlowM3s * 60000, 2)} L/min · ${number(state.settings.resistingForceN / 1000, 2)} kN · ${number(state.settings.reliefPressurePa / 100000, 1)} bar`);
+  const { pumpFlowM3s, reliefPressurePa, resistingForceN,
+    pumpCommandRatio = EXPERIMENT_SETTING_DEFAULTS.pumpCommandRatio,
+    returnRestrictionPaPerM3s = EXPERIMENT_SETTING_DEFAULTS.returnRestrictionPaPerM3s } = state.settings;
+  const nominalLitresPerMinute = pumpFlowM3s * 60000;
+  const returnReferenceBar = returnRestrictionPaPerM3s / RETURN_RESISTANCE_PER_BAR;
+  $('#pump-flow').value = nominalLitresPerMinute;
+  $('#relief-pressure').value = reliefPressurePa / 1e5;
+  $('#resisting-force').value = resistingForceN / 1000;
+  $('#pump-command').value = pumpCommandRatio * 100;
+  $('#return-restriction').value = returnReferenceBar;
+  text('#applied-settings', `공급 ${number(nominalLitresPerMinute * pumpCommandRatio)} L/min · 부하 ${number(resistingForceN / 1000)} kN · 릴리프 ${number(reliefPressurePa / 1e5, 1)} bar · 복귀 기준 ${number(returnReferenceBar)} bar`);
 }
 function syncControls({ settings = false } = {}) {
   if (settings) syncSettings();
@@ -318,10 +328,11 @@ function flowStyle(element, flow, pressure) {
   if (flowing) element.setAttribute(flow < 0 ? 'marker-start' : 'marker-end', 'url(#circuit-arrow)');
 }
 function refreshCircuit() {
-  const { portsPa, flowsM3s } = snapshot;
+  const { portsPa, flowsM3s, returnBackpressurePa } = snapshot;
   $$('[data-circuit-flow]').forEach(path => {
     const flow = path.dataset.circuitFlow === 'combinedReturn' ? flowsM3s.valveToTank + flowsM3s.reliefToTank : flowsM3s[path.dataset.circuitFlow];
-    flowStyle(path, flow, portsPa[path.dataset.pressurePort]);
+    const pressure = path.dataset.circuitFlow === 'valveToTank' ? returnBackpressurePa : portsPa[path.dataset.pressurePort];
+    flowStyle(path, flow, pressure);
   });
   const first = $('#circuit-link-one'), second = $('#circuit-link-two');
   if (state.command === 'extend') {
@@ -330,7 +341,7 @@ function refreshCircuit() {
     first.setAttribute('d', 'M250 206L360 160V134'); second.setAttribute('d', 'M250 134V160L360 206');
   } else { first.setAttribute('d', 'M250 206V179H360V206'); second.setAttribute('d', ''); }
   flowStyle(first, flowsM3s.supplyToValve, portsPa.P);
-  flowStyle(second, state.command === 'neutral' ? 0 : flowsM3s.valveToTank, portsPa.T);
+  flowStyle(second, state.command === 'neutral' ? 0 : flowsM3s.valveToTank, returnBackpressurePa);
   $('#circuit-isolated').style.display = state.command === 'neutral' ? '' : 'none';
   const pistonX = 238 + state.positionM / .3 * 169;
   $('#circuit-piston').setAttribute('d', `M${pistonX} 40V87M${pistonX} 64H${pistonX + 85}`);
@@ -345,13 +356,15 @@ function refreshCircuit() {
       : '실린더 유량은 0입니다. 압력은 남아 있고 펌프 유량은 릴리프를 통해 탱크로 돌아갑니다.');
 }
 function refreshReadouts() {
-  const { status, portsPa, flowsM3s, volumesM3, powerW } = snapshot;
+  const { status, portsPa, flowsM3s, volumesM3, powerW, returnBackpressurePa } = snapshot;
   const stopped = status === 'pressure-limit' || status === 'end-stop';
   text('#status-badge', statuses[status]); $('#status-badge').classList.toggle('attention', stopped);
   const description = status === 'neutral'
-    ? 'P→T는 순환하고 A·B는 막혀 있습니다. 양실 압력은 마지막 상태를 이상적으로 유지합니다.'
+    ? `P→T는 순환하고 A·B는 막혀 있습니다. 양실 압력은 마지막 상태를 유지합니다.${returnBackpressurePa > 0 ? ' 복귀 저항 때문에 펌프 압력이 생깁니다.' : ''}`
     : status === 'moving'
-      ? `${commands[state.command]}: 부하를 이길 압력이 만들어집니다. 속도는 공급 유량과 선택된 액실 면적으로 정해집니다.`
+      ? flowsM3s.reliefToTank > 0
+        ? '복귀 배압으로 펌프 압력이 상한에 도달했습니다. 일부 유량이 릴리프로 우회하고 나머지 유량으로 피스톤이 움직입니다.'
+        : `${commands[state.command]} · 속도는 액실 공급 유량과 유효 면적으로 정해집니다.${returnBackpressurePa > 0 ? ' 복귀측 배압을 이기려면 펌프 압력이 더 필요합니다.' : ''}`
       : status === 'pressure-limit'
         ? '필요한 힘이 이 방향의 압력 한계에 도달했습니다. 피스톤은 정지하고 공급 유량은 릴리프로 우회합니다.'
         : '피스톤이 행정 끝에 닿았습니다. 재생을 계속하면 오일은 릴리프로 흐르며 손실 에너지가 쌓입니다.';
@@ -367,11 +380,18 @@ function refreshReadouts() {
   text('#readout-force', `유압력 ${number(snapshot.hydraulicForceN / 1000, 2)} kN`);
   text('#readout-capacity', snapshot.availableForceN === null
     ? '중립 · 방향별 힘 한계는 전진/후진에서 확인'
-    : `${commands[state.command]} 힘 한계 ${number(snapshot.availableForceN / 1000, 2)} kN · 저항 ${number(state.settings.resistingForceN / 1000, 2)} kN`);
+    : `${commands[state.command]} 정지 시 최대 유압력 ${number(snapshot.availableForceN / 1000, 2)} kN · 저항 ${number(state.settings.resistingForceN / 1000, 2)} kN`);
   text('#readout-flow-pump', `${number(flowsM3s.pumpFromTank * 60000)} L/min`);
   text('#readout-flow-return', `${number(flowsM3s.valveToTank * 60000)} L/min`);
   text('#readout-flow-relief', `${number(flowsM3s.reliefToTank * 60000)} L/min`);
   for (const key of ['pump', 'load', 'relief']) text(`#energy-${key}`, energyText(state.energyJ[key]));
+  const hasReturnRestriction = powerW.returnLoss !== undefined;
+  $('#return-backpressure').hidden = !hasReturnRestriction;
+  $('#return-loss-energy-row').hidden = !hasReturnRestriction;
+  if (hasReturnRestriction) {
+    text('#return-backpressure', `방향밸브 T 포트 배압 ${number(returnBackpressurePa / 1e5)} bar`);
+    text('#energy-return-loss', energyText(state.energyJ.returnLoss));
+  }
   text('#energy-summary', `펌프 일 ${energyText(state.energyJ.pump)}`);
   text('#power-relief', `${number(powerW.relief, 1)} W`);
   text('#volume-cylinder', `${number(volumesM3.cap * 1000, 3)} / ${number(volumesM3.rod * 1000, 3)} L`);
@@ -451,11 +471,17 @@ try {
   $$('[data-command]').forEach(button => button.addEventListener('click', () => changeCommand(button.dataset.command)));
   $('#settings-form').addEventListener('submit', event => {
     event.preventDefault(); if (busy || !event.currentTarget.reportValidity()) return;
-    const settings = { pumpFlowM3s: Number($('#pump-flow').value) / 60000, reliefPressurePa: Number($('#relief-pressure').value) * 100000, resistingForceN: Number($('#resisting-force').value) * 1000 };
+    const settings = {
+      pumpFlowM3s: $('#pump-flow').valueAsNumber / 60000,
+      reliefPressurePa: $('#relief-pressure').valueAsNumber * 1e5,
+      resistingForceN: $('#resisting-force').valueAsNumber * 1000,
+      pumpCommandRatio: $('#pump-command').valueAsNumber / 100,
+      returnRestrictionPaPerM3s: $('#return-restriction').valueAsNumber * RETURN_RESISTANCE_PER_BAR,
+    };
     rememberExperiment(); stop(); const before = state; state = reconfigureExperiment(state, settings);
     guide = observeGuide(guide, { type: 'settings', before, after: state });
     syncControls({ settings: true }); refresh(true); saveLocal();
-    toast('같은 위치에서 새 조건을 적용했습니다. 시간·압력·에너지는 0부터 시작합니다.');
+    toast('같은 위치에서 새 조건을 적용했습니다. 시간·양실 압력·누적 에너지는 0부터 시작합니다.');
   });
   $('#undo-new').addEventListener('click', () => {
     if (!previousExperiment || busy) return;

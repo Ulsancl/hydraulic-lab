@@ -1,4 +1,4 @@
-import { DIMENSIONS_SI, instantSnapshot } from './model.js';
+import { DIMENSIONS_SI, EXPERIMENT_SETTING_DEFAULTS, instantSnapshot } from './model.js';
 import { LESSONS } from './lessons.js';
 
 export const GUIDE_STEP_COUNTS = Object.freeze({ 'speed-ratio': 2, 'pressure-limit': 3, 'neutral-hold': 3 });
@@ -6,7 +6,8 @@ const close = (a, b, tolerance = 1e-10) => Math.abs(a - b) <= tolerance;
 const strokeM = DIMENSIONS_SI.strokeM;
 const observedTravelM = .001;
 const matches = (state, pressurePa = 5e6) => close(state.settings.pumpFlowM3s, .0001, 1e-14)
-  && close(state.settings.resistingForceN, 4000, 1e-8) && close(state.settings.reliefPressurePa, pressurePa, .01);
+  && close(state.settings.resistingForceN, 4000, 1e-8) && close(state.settings.reliefPressurePa, pressurePa, .01)
+  && Object.entries(EXPERIMENT_SETTING_DEFAULTS).every(([key, expected]) => (state.settings[key] ?? expected) === expected);
 
 export function createGuide(lessonId) {
   if (!LESSONS.some(lesson => lesson.id === lessonId)) throw new RangeError('Unknown guided experiment');

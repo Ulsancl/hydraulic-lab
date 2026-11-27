@@ -13,6 +13,8 @@ export function hydraulicDetail(state, snapshot = instantSnapshot(state)) {
   const distanceToStopM = moving ? s.velocityMps > 0 ? DIMENSIONS_SI.strokeM - s.positionM : s.positionM : null;
   const cylinderW = netHydraulicN * s.velocityMps;
   const chamberPowerW = p.A * q.capIntoCylinder + p.B * q.rodIntoCylinder;
+  const returnLossW = s.powerW.returnLoss ?? 0;
+  const returnLossJ = state.energyJ.returnLoss ?? 0;
   return {
     command: state.command, status: s.status,
     geometry: { capAreaM2, rodAreaM2, displacedRodAreaM2, retractToExtendSpeedRatio: capAreaM2 / rodAreaM2 },
@@ -29,10 +31,10 @@ export function hydraulicDetail(state, snapshot = instantSnapshot(state)) {
       cap: { pressurePa: p.A, volumeM3: v.cap, volumeRateM3s: q.capIntoCylinder, signedPowerIntoW: p.A * q.capIntoCylinder },
       rod: { pressurePa: p.B, volumeM3: v.rod, volumeRateM3s: q.rodIntoCylinder, signedPowerIntoW: p.B * q.rodIntoCylinder },
     },
-    circuit: { pressuresPa: { ...p }, flowsM3s: { ...q }, returnCombinedM3s,
+    circuit: { pressuresPa: { ...p }, returnBackpressurePa: s.returnBackpressurePa ?? p.T, flowsM3s: { ...q }, returnCombinedM3s,
       connections: [...s.connections], isolatedHold: s.chamberPressureMeaning === 'isolated-ideal-hold' },
     power: { pumpW: s.powerW.pump, loadW: s.powerW.load, reliefW: s.powerW.relief, cylinderW,
-      residualW: s.powerW.pump - s.powerW.load - s.powerW.relief,
+      returnLossW, residualW: s.powerW.pump - s.powerW.load - s.powerW.relief - returnLossW,
       loadShare: s.powerW.pump > 0 ? s.powerW.load / s.powerW.pump : null },
     balance: {
       fluidVolumeM3: v.cap + v.rod + v.tank, referenceFluidVolumeM3: v.totalFluid,
@@ -41,9 +43,9 @@ export function hydraulicDetail(state, snapshot = instantSnapshot(state)) {
       pumpBranchResidualM3s: q.pumpFromTank - q.supplyToValve - q.reliefToTank,
       tankResidualM3s: q.tankNetInto - (returnCombinedM3s - q.pumpFromTank),
       cylinderPowerResidualW: chamberPowerW - cylinderW,
-      energyResidualJ: state.energyJ.pump - state.energyJ.load - state.energyJ.relief,
+      energyResidualJ: state.energyJ.pump - state.energyJ.load - state.energyJ.relief - returnLossJ,
     },
-    energy: { pumpJ: state.energyJ.pump, loadJ: state.energyJ.load, reliefJ: state.energyJ.relief },
+    energy: { pumpJ: state.energyJ.pump, loadJ: state.energyJ.load, reliefJ: state.energyJ.relief, returnLossJ },
     tank: { volumeM3: v.tank, rateM3s: q.tankNetInto },
   };
 }
