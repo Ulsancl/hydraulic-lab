@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { runWindowsPowerShell } from '../desktop/windows-powershell.cjs';
 
 function inside(root, file) {
   const relative = path.relative(root, file);
@@ -54,6 +56,23 @@ export function secureDirectory(root, directory) {
 export function stagingDirectory(root) {
   secureDirectory(root, root);
   return fs.mkdtempSync(path.join(root, '.security-stage-'));
+}
+
+export async function buildStagingDirectory(root) {
+  if (process.platform !== 'win32') return stagingDirectory(root);
+  secureDirectory(root, root);
+  const directory = path.join(root, '.security-stage-' + randomUUID());
+  await runWindowsPowerShell(`
+$directory = (ConvertFrom-Json -InputObject ([Console]::In.ReadToEnd())).directory
+if ([IO.Directory]::Exists($directory)) { throw 'Build staging directory already exists' }
+$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+$acl = [Security.AccessControl.DirectorySecurity]::new()
+$acl.SetAccessRuleProtection($true, $false)
+$acl.SetAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl',
+  [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit', 'None', 'Allow'))
+$created = [IO.Directory]::CreateDirectory($directory, $acl)
+`, { directory });
+  return checkedPath(root, directory);
 }
 
 export function writeArtifact(root, file, data) {

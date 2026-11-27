@@ -159,6 +159,16 @@ test('JSON and the UTF-8 byte boundary reject malformed or oversized input, incl
   assert.throws(() => parseProject(multibyte), error => error.code === 'PROJECT_TOO_LARGE');
 });
 
+test('JSON work limits preserve formatted legacy files and reject excessive structure', () => {
+  const original = example();
+  const padded = serializeProject(original).replaceAll('\n', '\n' + ' '.repeat(2048));
+  assert.ok(padded.length > 64 * 1024);
+  assert.deepEqual(parseProject(padded), original);
+  for (const raw of ['['.repeat(32) + '0' + ']'.repeat(32), JSON.stringify({ note: 'x'.repeat(65_536) })]) {
+    assert.throws(() => parseProject(raw), { code: 'PROJECT_TOO_COMPLEX' });
+  }
+});
+
 test('view and playback contracts are strict on files but safely normalized for new live observations', () => {
   for (const change of [
     p => { p.observation.playbackRate = .09; }, p => { p.observation.playbackRate = 4.01; },

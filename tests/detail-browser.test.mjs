@@ -65,7 +65,7 @@ async function lesson(id) {
 try {
   await mkdir(output, { recursive: true });
   await rm(path.join(output, 'failure.png'), { force: true });
-  server = await createServer({ root, server: { host: '127.0.0.1', port: 5250, strictPort: true, hmr: false, watch: null } }); await server.listen();
+  server = await createServer({ root, mode: 'test', server: { host: '127.0.0.1', port: 5250, strictPort: true, hmr: false, watch: null } }); await server.listen();
   // Match the existing browser suite; record the actual supported backend below.
   browser = await chromium.launch({ headless: true });
   context = await browser.newContext({ viewport: { width: 1600, height: 1100 }, deviceScaleFactor: 1, acceptDownloads: true });
