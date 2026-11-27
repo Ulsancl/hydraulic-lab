@@ -57,7 +57,6 @@ export function renderHydraulicDetails(state, snapshot, view) {
   }
   const reference = `적용 조건 · 펌프 토출 ${format(d.circuit.flowsM3s.pumpFromTank * 60000)} L/min · ${format(state.settings.reliefPressurePa / 1e5, 1)} bar 상한`;
   setText('detail-reference', reference); setText('focus-detail-reference', reference);
-  document.getElementById('focus-part-select').value = view.selectedPart;
 
   const limit = Math.max(d.force.extendLimitN, d.force.retractLimitN);
   for (const [id, value] of [['A', d.force.capN], ['B', d.force.rodN], ['net', d.force.netHydraulicN]]) {

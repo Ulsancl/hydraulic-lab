@@ -64,7 +64,7 @@ async function drawnCircuitMatches(current) {
 try {
   const clockOrigin = new Date('2026-10-01T00:00:00Z');
   await page.clock.install({ time: clockOrigin });
-  await page.clock.pauseAt(clockOrigin);
+  await page.clock.pauseAt(new Date(clockOrigin.getTime() + 60_000));
   await page.goto('http://127.0.0.1:5200/', { waitUntil: 'networkidle' });
   await page.waitForFunction(() => !!window.hydraulicLab);
   await page.clock.runFor(100);
