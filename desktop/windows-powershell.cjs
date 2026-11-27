@@ -4,11 +4,16 @@ const path = require('node:path');
 function runWindowsPowerShell(script, input) {
   const systemRoot = process.env.SystemRoot;
   if (!systemRoot || !path.win32.isAbsolute(systemRoot)) throw new Error('Windows system directory unavailable');
-  const executable = path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const powerShell = path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0');
+  const executable = path.win32.join(powerShell, 'powershell.exe');
+  const env = { ...process.env };
+  // PowerShell 7 runners can otherwise pass modules incompatible with 5.1.
+  for (const key of Object.keys(env)) if (key.toLowerCase() === 'psmodulepath') delete env[key];
+  env.PSModulePath = path.win32.join(powerShell, 'Modules');
   const command = Buffer.from("$ErrorActionPreference = 'Stop'\n[Console]::InputEncoding = [Text.UTF8Encoding]::new($false)\n[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n" + script, 'utf16le').toString('base64');
   return new Promise((resolve, reject) => {
     const child = spawn(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', command],
-      { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
+      { env, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
     let output = '';
     child.stdout.setEncoding('utf8').on('data', chunk => { output += chunk; });
     child.on('error', reject);
